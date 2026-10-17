@@ -1,0 +1,74 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Manrope:wght@400;500;600;700;800&display=swap');
+@import "tailwindcss";
+
+:root {
+  font-family: var(--font-body);
+  color: #11151d;
+  background: #f5f6f8;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+
+  --font-body: 'Inter', 'Segoe UI', sans-serif;
+  --font-heading: 'Manrope', 'Segoe UI', sans-serif;
+  --text: #11151d;
+  --muted: #626b7a;
+  --page-bg: #f5f6f8;
+  --surface: #fff;
+  --subtle: #f1f3f6;
+  --border: #e2e5ea;
+  --border-strong: #c5cbd4;
+  --blue: #2463a6;
+  --blue-soft: #edf3f9;
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  color: #f3f5f8;
+  background: #171b23;
+  --text: #f3f5f8;
+  --muted: #a1a9b6;
+  --page-bg: #171b23;
+  --surface: #20252f;
+  --subtle: #292f3a;
+  --border: #353c48;
+  --border-strong: #505967;
+  --blue: #79aee5;
+  --blue-soft: #253648;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  min-width: 320px;
+  min-height: 100vh;
+  margin: 0;
+  font-family: var(--font-body);
+  font-size: 14px;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 3px solid #2463a6;
+  outline-offset: 3px;
+}
+
+::selection {
+  color: #fff;
+  background: #2463a6;
+}
+
+#root {
+  min-height: 100vh;
+}
