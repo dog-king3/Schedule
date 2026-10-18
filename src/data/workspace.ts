@@ -1,5 +1,4 @@
-import { useRef, useState, type SetStateAction } from 'react'
-import { members as initialMembers } from './members'
+import type { Member } from './members'
 
 export type EventStatus = 'Pending' | 'Approved' | 'Declined'
 export type EventCategory = 'Meeting' | 'Activity' | 'Deadline'
@@ -62,55 +61,7 @@ export type AgendaItem = {
   createdAt: string
 }
 
-export type DirectoryMember = (typeof initialMembers)[number]
-
-const storeKeys = {
-  events: 'dms-workspace-events-v1',
-  chat: 'dms-workspace-chat-v1',
-  tasks: 'dms-workspace-tasks-v1',
-  agenda: 'dms-workspace-agenda-v1',
-  members: 'dms-workspace-members-v1',
-}
-
-export type StoredSetter<T> = (action: SetStateAction<T>) => boolean
-
-function loadValue<T>(key: string, initial: T): T {
-  try {
-    const saved = window.localStorage.getItem(key)
-    return saved ? (JSON.parse(saved) as T) : initial
-  } catch {
-    return initial
-  }
-}
-
-export function useStoredState<T>(key: string, initial: T): [T, StoredSetter<T>] {
-  const [value, setValue] = useState<T>(() => loadValue(key, initial))
-  const currentValue = useRef(value)
-
-  const update: StoredSetter<T> = (action) => {
-    const next = typeof action === 'function'
-      ? (action as (previous: T) => T)(currentValue.current)
-      : action
-    try {
-      window.localStorage.setItem(key, JSON.stringify(next))
-      currentValue.current = next
-      setValue(next)
-      return true
-    } catch (error) {
-      console.error(`Could not save local workspace data for ${key}.`, error)
-      window.dispatchEvent(new CustomEvent('dms-storage-error', { detail: 'Changes could not be saved in this browser. Check available storage and try again.' }))
-      return false
-    }
-  }
-
-  return [value, update]
-}
-
-export const useEvents = () => useStoredState<CouncilEvent[]>(storeKeys.events, [])
-export const useChatMessages = () => useStoredState<ChatMessage[]>(storeKeys.chat, [])
-export const useTasks = () => useStoredState<CouncilTask[]>(storeKeys.tasks, [])
-export const useAgenda = () => useStoredState<AgendaItem[]>(storeKeys.agenda, [])
-export const useDirectoryMembers = () => useStoredState<DirectoryMember[]>(storeKeys.members, initialMembers)
+export type DirectoryMember = Member
 
 export function createId(): string {
   return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`

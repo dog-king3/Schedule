@@ -2,25 +2,32 @@ export type Member = {
   id: string
   name: string
   role: string
-  email?: string
+  email: string
 }
 
 export const members: Member[] = [
-  { id: 'nikhil-nayak', name: 'Nikhil Nayak', role: 'President', email: 'niknayak@dunlapstudents.net' },
-  { id: 'julia-charles', name: 'Julia Charles', role: 'President', email: 'julcharles@dunlapstudents.net' },
-  { id: 'mahima-shah', name: 'Mahima Shah', role: 'President' },
-  { id: 'sana-shahjahan', name: 'Sana Shahjahan', role: 'Treasurer / Secretary' },
-  { id: 'arvin-baviskar', name: 'Arvin Baviskar', role: 'Pop Tab President' },
-  { id: 'srivi-rayasam', name: 'Srivi Rayasam', role: 'Pop Tab President' },
-  { id: 'sitaara-jordan', name: 'Sitaara Jordan', role: 'Pop Tab President' },
-  { id: 'sanay', name: 'Sanay', role: 'Service / Support Head' },
-  { id: 'sayan', name: 'Sayan', role: 'Service / Support Head' },
-  { id: 'amili', name: 'Amili', role: 'Social Head' },
-  { id: 'chizara', name: 'Chizara', role: 'Social Head' },
-  { id: 'cora', name: 'Cora', role: 'Spirit Head' },
-  { id: 'laura', name: 'Laura', role: 'Spirit Head' },
-  { id: 'mrs-copple', name: 'Mrs. Copple', role: 'Teacher Administrator' },
+  { id: 'mahima-shah', name: 'Mahima Shah', role: 'Co-President', email: 'mahshah1@dunlapstudents.net' },
+  { id: 'nikhil-nayak', name: 'Nikhil Nayak', role: 'Co-President', email: 'niknayak@dunlapstudents.net' },
+  { id: 'sana-shajahan', name: 'Sana Shajahan', role: 'Secretary/Treasurer', email: 'sanshajahan@dunlapstudents.net' },
+  { id: 'julia-charles', name: 'Julia Charles', role: 'Co-President', email: 'julcharles@dunlapstudents.net' },
+  { id: 'erin-copple', name: 'Erin Copple', role: 'Faculty Advisor', email: 'ecopple@dunlapcusd.net' },
+  { id: 'sanay-sumesh', name: 'Sanay Sumesh', role: 'Service/Support Head', email: 'sansumesh@dunlapstudents.net' },
+  { id: 'sayan-sumeeth', name: 'Sayan Sumeeth', role: 'Service/Support Head', email: 'saysumeeth@dunlapstudents.net' },
+  { id: 'sitaara-jorden', name: 'Sitaara Jorden', role: 'Pop-Tab President', email: 'sitjorden@dunlapstudents.net' },
+  { id: 'arvin-baviskar', name: 'Arvin Baviskar', role: 'Pop-Tab President', email: 'arvbaviskar@dunlapstudents.net' },
+  { id: 'cora-bradley', name: 'Cora Bradley', role: 'Spirit Head', email: 'corbradley@dunlapstudents.net' },
+  { id: 'laura-lang', name: 'Laura Lang', role: 'Spirit Head', email: 'laulang@dunlapstudents.net' },
+  { id: 'amili-sinha', name: 'Amili Sinha', role: 'Social Head', email: 'amisinha@dunlapstudents.net' },
+  { id: 'chizara-opara', name: 'Chizara Opara', role: 'Social Head', email: 'chiopara@dunlapstudents.net' },
+  { id: 'rishik-meduru', name: 'Rishik Meduru', role: 'Dance Committee', email: 'rismeduru@dunlapstudents.net' },
 ]
+
+export function getMemberByEmail(email: string | null | undefined): Member | undefined {
+  const normalizedEmail = email?.trim().toLowerCase()
+  return normalizedEmail
+    ? members.find((member) => member.email.toLowerCase() === normalizedEmail)
+    : undefined
+}
 
 export function getInitials(name: string): string {
   return name

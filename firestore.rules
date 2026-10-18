@@ -1,0 +1,145 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null
+        && request.auth.token.email_verified == true
+        && request.auth.token.firebase.sign_in_provider == 'google.com';
+    }
+
+    function approvedMember() {
+      return signedIn() && request.auth.token.email in [
+        'mahshah1@dunlapstudents.net',
+        'niknayak@dunlapstudents.net',
+        'sanshajahan@dunlapstudents.net',
+        'julcharles@dunlapstudents.net',
+        'ecopple@dunlapcusd.net',
+        'sansumesh@dunlapstudents.net',
+        'saysumeeth@dunlapstudents.net',
+        'sitjorden@dunlapstudents.net',
+        'arvbaviskar@dunlapstudents.net',
+        'corbradley@dunlapstudents.net',
+        'laulang@dunlapstudents.net',
+        'amisinha@dunlapstudents.net',
+        'chiopara@dunlapstudents.net',
+        'rismeduru@dunlapstudents.net'
+      ];
+    }
+
+    function currentMember(id) {
+      return (request.auth.token.email == 'mahshah1@dunlapstudents.net' && id == 'mahima-shah')
+        || (request.auth.token.email == 'niknayak@dunlapstudents.net' && id == 'nikhil-nayak')
+        || (request.auth.token.email == 'sanshajahan@dunlapstudents.net' && id == 'sana-shajahan')
+        || (request.auth.token.email == 'julcharles@dunlapstudents.net' && id == 'julia-charles')
+        || (request.auth.token.email == 'ecopple@dunlapcusd.net' && id == 'erin-copple')
+        || (request.auth.token.email == 'sansumesh@dunlapstudents.net' && id == 'sanay-sumesh')
+        || (request.auth.token.email == 'saysumeeth@dunlapstudents.net' && id == 'sayan-sumeeth')
+        || (request.auth.token.email == 'sitjorden@dunlapstudents.net' && id == 'sitaara-jorden')
+        || (request.auth.token.email == 'arvbaviskar@dunlapstudents.net' && id == 'arvin-baviskar')
+        || (request.auth.token.email == 'corbradley@dunlapstudents.net' && id == 'cora-bradley')
+        || (request.auth.token.email == 'laulang@dunlapstudents.net' && id == 'laura-lang')
+        || (request.auth.token.email == 'amisinha@dunlapstudents.net' && id == 'amili-sinha')
+        || (request.auth.token.email == 'chiopara@dunlapstudents.net' && id == 'chizara-opara')
+        || (request.auth.token.email == 'rismeduru@dunlapstudents.net' && id == 'rishik-meduru');
+    }
+
+    function canonicalMember(id, data) {
+      return data.keys().hasOnly(['id', 'name', 'role', 'email'])
+        && data.id == id
+        && (
+          (id == 'mahima-shah' && data.name == 'Mahima Shah' && data.role == 'Co-President' && data.email == 'mahshah1@dunlapstudents.net')
+          || (id == 'nikhil-nayak' && data.name == 'Nikhil Nayak' && data.role == 'Co-President' && data.email == 'niknayak@dunlapstudents.net')
+          || (id == 'sana-shajahan' && data.name == 'Sana Shajahan' && data.role == 'Secretary/Treasurer' && data.email == 'sanshajahan@dunlapstudents.net')
+          || (id == 'julia-charles' && data.name == 'Julia Charles' && data.role == 'Co-President' && data.email == 'julcharles@dunlapstudents.net')
+          || (id == 'erin-copple' && data.name == 'Erin Copple' && data.role == 'Faculty Advisor' && data.email == 'ecopple@dunlapcusd.net')
+          || (id == 'sanay-sumesh' && data.name == 'Sanay Sumesh' && data.role == 'Service/Support Head' && data.email == 'sansumesh@dunlapstudents.net')
+          || (id == 'sayan-sumeeth' && data.name == 'Sayan Sumeeth' && data.role == 'Service/Support Head' && data.email == 'saysumeeth@dunlapstudents.net')
+          || (id == 'sitaara-jorden' && data.name == 'Sitaara Jorden' && data.role == 'Pop-Tab President' && data.email == 'sitjorden@dunlapstudents.net')
+          || (id == 'arvin-baviskar' && data.name == 'Arvin Baviskar' && data.role == 'Pop-Tab President' && data.email == 'arvbaviskar@dunlapstudents.net')
+          || (id == 'cora-bradley' && data.name == 'Cora Bradley' && data.role == 'Spirit Head' && data.email == 'corbradley@dunlapstudents.net')
+          || (id == 'laura-lang' && data.name == 'Laura Lang' && data.role == 'Spirit Head' && data.email == 'laulang@dunlapstudents.net')
+          || (id == 'amili-sinha' && data.name == 'Amili Sinha' && data.role == 'Social Head' && data.email == 'amisinha@dunlapstudents.net')
+          || (id == 'chizara-opara' && data.name == 'Chizara Opara' && data.role == 'Social Head' && data.email == 'chiopara@dunlapstudents.net')
+          || (id == 'rishik-meduru' && data.name == 'Rishik Meduru' && data.role == 'Dance Committee' && data.email == 'rismeduru@dunlapstudents.net')
+        );
+    }
+
+    match /members/{memberId} {
+      allow read: if approvedMember();
+      allow create, update: if approvedMember() && canonicalMember(memberId, request.resource.data);
+      allow delete: if false;
+    }
+
+    match /events/{eventId} {
+      allow read: if approvedMember();
+      allow create: if approvedMember()
+        && request.resource.data.id == eventId
+        && currentMember(request.resource.data.creatorId)
+        && request.resource.data.updatedById == request.resource.data.creatorId
+        && request.resource.data.status == 'Pending';
+      allow update: if approvedMember() && (
+        (
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['comments'])
+          && request.resource.data.comments.size() == resource.data.comments.size() + 1
+          && request.resource.data.comments.hasAll(resource.data.comments)
+          && currentMember(request.resource.data.comments[resource.data.comments.size()].memberId)
+          && request.resource.data.comments[resource.data.comments.size()].keys().hasOnly(['id', 'memberId', 'text', 'createdAt'])
+        )
+        || (
+          request.resource.data.status == resource.data.status
+          && request.resource.data.creatorId == resource.data.creatorId
+          && request.resource.data.get('approverId', '') == resource.data.get('approverId', '')
+          && request.resource.data.get('decidedAt', '') == resource.data.get('decidedAt', '')
+          && currentMember(request.resource.data.updatedById)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'title', 'date', 'timeType', 'startTime', 'endTime', 'location', 'description',
+            'category', 'notes', 'updatedById', 'updatedAt'
+          ])
+        )
+        || (
+          resource.data.status == 'Pending'
+          && request.resource.data.status in ['Approved', 'Declined']
+          && request.resource.data.creatorId == resource.data.creatorId
+          && currentMember(request.resource.data.approverId)
+          && request.resource.data.updatedById == request.resource.data.approverId
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'status', 'updatedById', 'updatedAt', 'approverId', 'decidedAt', 'declineReason'
+          ])
+        )
+      );
+      allow delete: if approvedMember();
+    }
+
+    match /chatMessages/{messageId} {
+      allow read: if approvedMember();
+      allow create: if approvedMember()
+        && request.resource.data.id == messageId
+        && currentMember(request.resource.data.memberId)
+        && request.resource.data.keys().hasOnly(['id', 'memberId', 'text', 'createdAt']);
+      allow update, delete: if false;
+    }
+
+    match /tasks/{taskId} {
+      allow read, delete: if approvedMember();
+      allow create, update: if approvedMember()
+        && request.resource.data.id == taskId
+        && (
+          request.resource.data.assigneeId == ''
+          || request.resource.data.assigneeId in [
+            'mahima-shah', 'nikhil-nayak', 'sana-shajahan', 'julia-charles',
+            'erin-copple', 'sanay-sumesh', 'sayan-sumeeth', 'sitaara-jorden',
+            'arvin-baviskar', 'cora-bradley', 'laura-lang', 'amili-sinha',
+            'chizara-opara', 'rishik-meduru'
+          ]
+        );
+    }
+
+    match /agendaItems/{itemId} {
+      allow read, delete: if approvedMember();
+      allow create, update: if approvedMember()
+        && request.resource.data.id == itemId
+        && request.resource.data.keys().hasOnly(['id', 'eventId', 'text', 'completed', 'createdAt'])
+        && request.resource.data.completed is bool;
+    }
+  }
+}

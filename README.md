@@ -1,32 +1,56 @@
 # DMS Student Council
 
-A responsive student-council workspace built with React, TypeScript, Vite, and Tailwind CSS.
+An existing React, TypeScript, and Vite workspace for the DMS Student Council executive board. It uses Firebase Authentication and Cloud Firestore for approved-member sign-in and shared workspace data.
 
-## Run locally
+## Run locally in VS Code
 
-Requirements: Node.js 20.19+ or 22.12+.
+Requirements: Node.js 20.19+ or 22.12+. The Firestore Emulator test also requires Java 21+ and downloads the emulator the first time it runs.
 
-```sh
-npm install
-npm run dev
-```
+1. Copy `.env.example` to `.env.local` and fill in the Firebase web-app values (setup below).
+2. In the integrated terminal, run:
 
-Open the local URL printed by Vite.
+   ```sh
+   npm install
+   npm run dev
+   ```
 
-## Current prototype behavior
+3. Open the local URL printed by Vite. The app requires an HTTP development server; opening `index.html` through Live Server does not provide Vite's module/build behavior.
 
-- Sign in by selecting one of the 14 roster members and entering the shared code `StudentCouncil2627`.
-- The code check is intentionally performed in the browser for this prototype. This is only a convenience gate and is not authentication or a security boundary.
-- The selected member is kept in `sessionStorage` for the current browser tab session. Sign out from the bottom of the sidebar to switch users.
-- Events, event comments, chat messages, tasks, meeting agenda items, member email edits, and theme preference are saved to this browser's `localStorage`.
-- Local data is not shared or synchronized with other members, browsers, or devices. Clearing browser storage removes that local data.
-- Event proposal approvals are an interface prototype only; they are not reviewed or synchronized by a server.
+## Firebase setup (Spark plan)
 
-There is no database or backend configured in the project. Do not use this prototype to store confidential information. For shared use, connect a database and server-side endpoints, replace the client-side shared-code check with server-validated sessions, and enforce authorization on every data request. Never use a client-side code check to protect private data.
+The repository already initializes the Firebase SDK, but no Firebase web-app configuration values are present locally. The Firebase web app `dms-studentcouncil` is already registered, so use its existing settings rather than registering a duplicate app. Do not link a billing account or upgrade from the Spark plan.
+
+1. In the Firebase Console, open the project containing `dms-studentcouncil` and keep it on the **Spark (no-cost)** plan.
+2. In **Project settings → General → Your apps → dms-studentcouncil**, copy the web-app configuration's `apiKey`, `authDomain`, `projectId`, and `appId` into `.env.local`, using the names in `.env.example`. The app registration name is not necessarily the Firebase project ID. These Firebase web-app values are public client configuration, not service-account credentials. Never add service-account JSON, private keys, or admin SDK credentials to this frontend.
+3. Open **Authentication → Sign-in method**, enable **Google**, and save. Under **Authentication → Settings → Authorized domains**, add `localhost` for local development and `dog-king3.github.io` for the Pages site.
+4. Open **Firestore Database → Create database** and keep the project on Spark. Deploy the restrictive rules in `firestore.rules` from a terminal after signing in to the Firebase CLI:
+
+   ```sh
+   npx firebase-tools login
+   npx firebase-tools deploy --only firestore:rules --project YOUR_FIREBASE_PROJECT_ID
+   ```
+
+   Replace `YOUR_FIREBASE_PROJECT_ID` with the real ID shown in Firebase Project settings; no project ID is configured or assumed in this repository. Do not use test mode or replace these rules with public read/write rules.
+5. For the hosted build, open the GitHub repository's **Settings → Secrets and variables → Actions → Variables** and add these repository variables using the same four values from the Firebase Web app: `VITE_FIREBASE_API_KEY`, `VITE_FIREBASE_AUTH_DOMAIN`, `VITE_FIREBASE_PROJECT_ID`, and `VITE_FIREBASE_APP_ID`.
+6. In GitHub **Settings → Pages**, set the build/deployment source to **GitHub Actions**. Push to `main` (or run the workflow manually). The deployment job stays skipped until all four Firebase variables are set.
+
+Google sign-in accepts only verified Firebase Google accounts whose email exactly matches the member roster. Firestore independently checks the verified email against the approved roster on every operation. All approved members can manage shared events, approvals, comments, chat, tasks, and agendas. The canonical roster is readable and initialized in Firestore but cannot be changed through the client; no member can grant a permission or change an approved email through client data.
+
+The member names, roles, and email addresses are included in the frontend and Firestore rules to support the public Pages client and exact-email authorization. Treat the deployed directory and repository contents as visible to anyone; do not add non-roster personal information or credentials.
+
+The supplied list contains **14 total entries (13 students plus Erin Copple)**, rather than 14 students plus Erin. Sitaara's surname is entered as **Jorden**, matching `sitjorden@dunlapstudents.net`; the earlier roster spelling **Jordan** still needs confirmation.
+
+## Shared data
+
+Firestore collections are `events` (including event comments and approval status), `chatMessages`, `tasks`, `agendaItems`, and `members`. Realtime snapshots keep approved members' browsers in sync. Theme preference alone remains local to the browser.
 
 ## Checks
 
 ```sh
 npm run lint
 npm run build
+npm run test:roster
+npm run test:rules
 ```
+
+The roster test verifies all 14 supplied records, exact email/name/role mappings, and alignment with the Firestore allowlist. The Firestore rules tests run against the local Firestore Emulator using a demo-only project ID. They cover anonymous/unapproved denial, approved cross-account sharing, identity spoofing, event approvals/comments, and immutable roster permissions. Google provider sign-in and real multi-device behavior require the Firebase setup above and must be verified against the configured project.

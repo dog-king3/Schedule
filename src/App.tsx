@@ -1,14 +1,15 @@
 import { useEffect, useMemo, useState, type FormEvent, type KeyboardEvent } from 'react'
 import {
-  ArrowRight, CalendarDays, Check, CheckCircle2, ChevronLeft,
-  ChevronRight, CircleHelp, ClipboardList, Clock3, LogOut, MessageCircle, Moon, MoreHorizontal,
+  CalendarDays, Check, CheckCircle2, ChevronLeft,
+  ChevronRight, ClipboardList, Clock3, LogOut, MessageCircle, Moon, MoreHorizontal,
   Plus, Search, Send, Sun, UsersRound, X,
 } from 'lucide-react'
-import { members as roster } from './data/members'
+import { getMemberByEmail, getInitials, members as roster } from './data/members'
+import { auth, firebaseConfigured, firebaseErrorMessage } from './data/firebase'
+import { useFirestoreCollection, type FirestoreSetter } from './data/firestore'
+import { GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut, type User } from 'firebase/auth'
 import {
-  createId, formatDate, formatDateTime, formatTime, getInitials, toLocalDate,
-  useAgenda, useChatMessages, useDirectoryMembers, useEvents, useTasks,
-  type StoredSetter,
+  createId, formatDate, formatDateTime, formatTime, toLocalDate,
   type AgendaItem, type ChatMessage, type CouncilEvent, type CouncilTask, type DirectoryMember,
   type EventCategory, type EventTimeType, type TaskStatus,
 } from './data/workspace'
@@ -18,17 +19,12 @@ type Page = 'Calendar' | 'Chat' | 'Tasks & Agenda' | 'Members'
 type CalendarView = 'Month' | 'Week' | 'Agenda'
 type Theme = 'light' | 'dark'
 
-const accessCode = 'StudentCouncil2627'
 const navItems: { name: Page; icon: typeof CalendarDays }[] = [
   { name: 'Calendar', icon: CalendarDays },
   { name: 'Chat', icon: MessageCircle },
   { name: 'Tasks & Agenda', icon: ClipboardList },
   { name: 'Members', icon: UsersRound },
 ]
-
-function readMember(): string {
-  return window.sessionStorage.getItem('dms-member') ?? ''
-}
 
 function useTheme() {
   const [theme, setTheme] = useState<Theme>(() => {
@@ -47,43 +43,85 @@ function useTheme() {
 
 function App() {
   const [theme, setTheme] = useTheme()
-  const [activeMemberId, setActiveMemberId] = useState(readMember)
-  const activeMember = roster.find((member) => member.id === activeMemberId)
+  const [firebaseUser, setFirebaseUser] = useState<User | null>(null)
+  const [authLoading, setAuthLoading] = useState(firebaseConfigured)
+  const [authError, setAuthError] = useState('')
   const [page, setPage] = useState<Page>('Calendar')
-  const [events, setEvents] = useEvents()
-  const [messages, setMessages] = useChatMessages()
-  const [tasks, setTasks] = useTasks()
-  const [agendaItems, setAgendaItems] = useAgenda()
-  const [directoryMembers, setDirectoryMembers] = useDirectoryMembers()
-  const [storageError, setStorageError] = useState('')
+  const [cloudError, setCloudError] = useState('')
+  const activeMember = getMemberByEmail(firebaseUser?.email)
+  const authorized = Boolean(firebaseUser && activeMember)
+  const [events, setEvents, eventsLoading] = useFirestoreCollection<CouncilEvent>('events', authorized)
+  const [messages, setMessages, messagesLoading] = useFirestoreCollection<ChatMessage>('chatMessages', authorized)
+  const [tasks, setTasks] = useFirestoreCollection<CouncilTask>('tasks', authorized)
+  const [agendaItems, setAgendaItems] = useFirestoreCollection<AgendaItem>('agendaItems', authorized)
+  const [directoryMembers, , membersLoading] = useFirestoreCollection<DirectoryMember>('members', authorized, roster)
 
   useEffect(() => {
-    const handleStorageError = (event: Event) => {
-      const detail = (event as CustomEvent<string>).detail
-      setStorageError(detail)
+    const firebaseAuth = auth
+    if (!firebaseAuth) {
+      return
     }
-    window.addEventListener('dms-storage-error', handleStorageError)
-    return () => window.removeEventListener('dms-storage-error', handleStorageError)
+
+    return onAuthStateChanged(firebaseAuth, (user) => {
+      setFirebaseUser(user)
+      setAuthLoading(false)
+      if (user && !getMemberByEmail(user.email)) {
+        setAuthError(`Access denied. ${user.email ?? 'This Google account'} is not on the approved council roster.`)
+        signOut(firebaseAuth).catch((error: unknown) => {
+          setAuthError(`Access denied, and sign-out failed: ${firebaseErrorMessage(error)}`)
+        })
+      } else if (user) {
+        setAuthError('')
+      }
+    }, (error) => {
+      setAuthError(`Could not check Google sign-in: ${firebaseErrorMessage(error)}`)
+      setAuthLoading(false)
+    })
   }, [])
 
-  function signOut() {
-    window.sessionStorage.removeItem('dms-member')
-    setActiveMemberId('')
+  useEffect(() => {
+    const handleCloudError = (event: Event) => setCloudError((event as CustomEvent<string>).detail)
+    window.addEventListener('dms-cloud-error', handleCloudError)
+    return () => window.removeEventListener('dms-cloud-error', handleCloudError)
+  }, [])
+
+  async function googleSignIn() {
+    if (!auth) return
+    setAuthError('')
+    try {
+      const result = await signInWithPopup(auth, new GoogleAuthProvider())
+      if (!getMemberByEmail(result.user.email)) {
+        await signOut(auth)
+        setAuthError(`Access denied. ${result.user.email ?? 'This Google account'} is not on the approved council roster.`)
+      }
+    } catch (error) {
+      setAuthError(`Google sign-in failed: ${firebaseErrorMessage(error)}`)
+    }
   }
 
+  async function googleSignOut() {
+    if (!auth) return
+    try {
+      await signOut(auth)
+      setFirebaseUser(null)
+      setAuthError('')
+    } catch (error) {
+      setAuthError(`Could not sign out: ${firebaseErrorMessage(error)}`)
+    }
+  }
+
+  if (authLoading) {
+    return <SignIn configured={firebaseConfigured} loading onGoogleSignIn={googleSignIn} error={authError} />
+  }
   if (!activeMember) {
-    return <SignIn onSuccess={(id) => {
-      window.sessionStorage.setItem('dms-member', id)
-      setActiveMemberId(id)
-    }} />
+    return <SignIn configured={firebaseConfigured} loading={false} onGoogleSignIn={googleSignIn} error={authError} />
   }
 
-  const isTeacher = activeMember.id === 'mrs-copple'
   const activePage = {
-    Calendar: <CalendarPage currentMemberId={activeMember.id} isTeacher={isTeacher} events={events} setEvents={setEvents} />,
+    Calendar: <CalendarPage currentMemberId={activeMember.id} events={events} setEvents={setEvents} />,
     Chat: <ChatPage currentMemberId={activeMember.id} messages={messages} setMessages={setMessages} />,
     'Tasks & Agenda': <TasksPage currentMemberId={activeMember.id} events={events} tasks={tasks} setTasks={setTasks} agendaItems={agendaItems} setAgendaItems={setAgendaItems} />,
-    Members: <MembersPage currentMemberId={activeMember.id} members={directoryMembers} setMembers={setDirectoryMembers} />,
+    Members: <MembersPage members={directoryMembers.length ? directoryMembers : roster} />,
   }[page]
 
   return (
@@ -106,7 +144,7 @@ function App() {
           <div className="profile-row">
             <span className="avatar">{getInitials(activeMember.name)}</span>
             <span className="profile-name"><strong>{activeMember.name}</strong><small>{activeMember.role}</small></span>
-            <button className="logout-button" type="button" onClick={signOut} aria-label="Switch user or log out" title="Switch user / log out"><LogOut size={16} /></button>
+            <button className="logout-button" type="button" onClick={googleSignOut} aria-label="Sign out" title="Sign out"><LogOut size={16} /></button>
           </div>
         </div>
       </aside>
@@ -121,10 +159,10 @@ function App() {
             <button className="icon-button" type="button" onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')} aria-label={`Switch to ${theme === 'light' ? 'dark' : 'light'} mode`} title="Switch theme">
               {theme === 'light' ? <Moon size={17} /> : <Sun size={17} />}
             </button>
-            <button className="icon-button mobile-signout" type="button" onClick={signOut} aria-label="Switch user or log out" title="Switch user / log out"><LogOut size={16} /></button>
+            <button className="icon-button mobile-signout" type="button" onClick={googleSignOut} aria-label="Sign out" title="Sign out"><LogOut size={16} /></button>
           </div>
         </header>
-        {storageError && <div className="storage-alert" role="alert"><span>{storageError}</span><button type="button" aria-label="Dismiss save warning" onClick={() => setStorageError('')}><X size={15} /></button></div>}
+        {(cloudError || (eventsLoading || messagesLoading || membersLoading)) && <div className="storage-alert" role={cloudError ? 'alert' : 'status'}><span>{cloudError || 'Syncing shared council workspace…'}</span><button type="button" aria-label="Dismiss message" onClick={() => setCloudError('')}><X size={15} /></button></div>}
         <div className="page-content">{activePage}</div>
       </main>
       <MobileNavigation page={page} onPageChange={setPage} />
@@ -132,42 +170,21 @@ function App() {
   )
 }
 
-function SignIn({ onSuccess }: { onSuccess: (memberId: string) => void }) {
-  const [memberId, setMemberId] = useState('')
-  const [code, setCode] = useState('')
-  const [error, setError] = useState('')
-
-  function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    if (!roster.some((member) => member.id === memberId)) {
-      setError('Select your name.')
-      return
-    }
-    if (code !== accessCode) {
-      setError('Incorrect access code.')
-      return
-    }
-    onSuccess(memberId)
-  }
-
+function SignIn({ configured, loading, onGoogleSignIn, error }: { configured: boolean; loading: boolean; onGoogleSignIn: () => void; error: string }) {
   return (
     <main className="signin-screen">
-      <form className="signin-card" onSubmit={submit}>
+      <section className="signin-card">
         <div className="signin-logo"><span className="brand-mark">D</span></div>
         <p className="signin-kicker">EXECUTIVE BOARD</p>
         <h1>DMS Student Council</h1>
-        <p className="signin-subtitle">Sign in to continue</p>
-        <label className="field-label" htmlFor="signin-member">Your name</label>
-        <select id="signin-member" className="control" value={memberId} onChange={(event) => { setMemberId(event.target.value); setError('') }} required>
-          <option value="" disabled>Select your name</option>
-          {roster.map((member) => <option key={member.id} value={member.id}>{member.name}</option>)}
-        </select>
-        <label className="field-label" htmlFor="signin-code">Access code</label>
-        <input id="signin-code" className="control" value={code} onChange={(event) => { setCode(event.target.value); setError('') }} type="password" autoComplete="current-password" required />
+        <p className="signin-subtitle">Sign in with your approved council Google account.</p>
         {error && <p className="form-error" role="alert">{error}</p>}
-        <button className="button button-primary signin-submit" type="submit">Continue <ArrowRight size={16} /></button>
-        <p className="signin-note">Names are selected for display and do not verify identity.</p>
-      </form>
+        {!configured && <p className="form-error" role="status">Firebase is not configured yet. Add the Firebase web app settings to your local environment before signing in.</p>}
+        <button className="button button-primary signin-submit" type="button" onClick={onGoogleSignIn} disabled={!configured || loading}>
+          {loading ? 'Checking sign-in…' : 'Continue with Google'}
+        </button>
+        <p className="signin-note">Only Google accounts matching the approved council roster can access this workspace.</p>
+      </section>
     </main>
   )
 }
@@ -185,8 +202,8 @@ function PageHeading({ eyebrow, title, description, action }: { eyebrow: string;
   </div>
 }
 
-function CalendarPage({ currentMemberId, isTeacher, events, setEvents }: {
-  currentMemberId: string; isTeacher: boolean; events: CouncilEvent[]; setEvents: React.Dispatch<React.SetStateAction<CouncilEvent[]>>
+function CalendarPage({ currentMemberId, events, setEvents }: {
+  currentMemberId: string; events: CouncilEvent[]; setEvents: FirestoreSetter<CouncilEvent>
 }) {
   const [view, setView] = useState<CalendarView>('Month')
   const [cursorDate, setCursorDate] = useState(() => new Date())
@@ -253,14 +270,14 @@ function CalendarPage({ currentMemberId, isTeacher, events, setEvents }: {
           <span className="upcoming-copy"><strong>{event.title}</strong><small>{eventTimeLabel(event)}{event.location ? ` · ${event.location}` : ''}</small></span>
         </button>)}</div> : <div className="mini-empty"><CalendarDays size={21} /><p>No confirmed meetings yet.</p></div>}
         <div className="proposal-summary"><span className="status-dot pending" />{events.filter((event) => event.status === 'Pending').length} pending {events.filter((event) => event.status === 'Pending').length === 1 ? 'proposal' : 'proposals'}</div>
-        {!isTeacher && <p className="subtle-hint">New events are submitted as proposals for review.</p>}
+        <p className="subtle-hint">Any approved board member can review event proposals.</p>
       </aside>
     </div>
     {formEvent !== undefined && <EventForm event={formEvent} initialDate={newEventDate} currentMemberId={currentMemberId} onClose={() => setFormEvent(undefined)} onSave={(event) => {
       setEvents((old) => formEvent ? old.map((item) => item.id === event.id ? event : item) : [...old, event])
       setFormEvent(undefined)
     }} />}
-    {selectedEvent && <EventDetails event={selectedEvent} isTeacher={isTeacher} currentMemberId={currentMemberId} onClose={() => setSelectedEventId('')} onEdit={() => { setSelectedEventId(''); setFormEvent(selectedEvent) }} onUpdate={(updated) => setEvents((old) => old.map((event) => event.id === updated.id ? updated : event))} onDelete={() => {
+    {selectedEvent && <EventDetails event={selectedEvent} currentMemberId={currentMemberId} onClose={() => setSelectedEventId('')} onEdit={() => { setSelectedEventId(''); setFormEvent(selectedEvent) }} onUpdate={(updated) => setEvents((old) => old.map((event) => event.id === updated.id ? updated : event))} onDelete={() => {
       if (!window.confirm(`Delete "${selectedEvent.title}"? This cannot be undone.`)) return
       setEvents((old) => old.filter((event) => event.id !== selectedEvent.id))
       setSelectedEventId('')
@@ -420,8 +437,8 @@ function EventForm({ event, initialDate, currentMemberId, onClose, onSave }: {
   </Modal>
 }
 
-function EventDetails({ event, isTeacher, currentMemberId, onClose, onEdit, onUpdate, onDelete }: {
-  event: CouncilEvent; isTeacher: boolean; currentMemberId: string; onClose: () => void; onEdit: () => void; onUpdate: (event: CouncilEvent) => void; onDelete: () => void
+function EventDetails({ event, currentMemberId, onClose, onEdit, onUpdate, onDelete }: {
+  event: CouncilEvent; currentMemberId: string; onClose: () => void; onEdit: () => void; onUpdate: (event: CouncilEvent) => void; onDelete: () => void
 }) {
   const [comment, setComment] = useState('')
   const creator = roster.find((member) => member.id === event.creatorId)
@@ -449,7 +466,7 @@ function EventDetails({ event, isTeacher, currentMemberId, onClose, onEdit, onUp
       {event.notes && <DetailBlock title="Agenda / preparation notes"><p>{event.notes}</p></DetailBlock>}
       <div className="audit-grid"><div><small>Created by</small><strong>{creator?.name ?? 'Board member'}</strong><span>{formatDateTime(event.createdAt)}</span></div><div><small>Last edited</small><strong>{event.updatedById ? roster.find((member) => member.id === event.updatedById)?.name ?? 'Board member' : 'Not edited'}</strong><span>{event.updatedById ? formatDateTime(event.updatedAt) : ''}</span></div>{approver && <div><small>{event.status} by</small><strong>{approver.name}</strong><span>{event.decidedAt ? formatDateTime(event.decidedAt) : ''}</span></div>}</div>
       {event.declineReason && <div className="decline-reason"><strong>Decision note</strong><p>{event.declineReason}</p></div>}
-      {isTeacher && event.status === 'Pending' && <div className="approval-actions"><span>Review proposal</span><div><button className="button button-secondary" type="button" onClick={() => decide('Declined')}>Decline</button><button className="button button-primary" type="button" onClick={() => decide('Approved')}><Check size={15} /> Approve</button></div></div>}
+      {event.status === 'Pending' && <div className="approval-actions"><span>Review proposal</span><div><button className="button button-secondary" type="button" onClick={() => decide('Declined')}>Decline</button><button className="button button-primary" type="button" onClick={() => decide('Approved')}><Check size={15} /> Approve</button></div></div>}
       <DetailBlock title={`Event discussion · ${event.comments.length}`}>
         {event.comments.length ? <div className="comment-list">{event.comments.map((item) => {
           const author = roster.find((member) => member.id === item.memberId)
@@ -457,7 +474,7 @@ function EventDetails({ event, isTeacher, currentMemberId, onClose, onEdit, onUp
         })}</div> : <p className="empty-inline">No comments yet. Start the discussion.</p>}
         <form className="comment-form" onSubmit={addComment}><textarea className="control textarea" aria-label="Add a comment" placeholder="Write a comment…" rows={2} value={comment} onChange={(e) => setComment(e.target.value)} maxLength={1000} required /><button className="button button-secondary" type="submit" disabled={!comment.trim()}><Send size={15} /> Comment</button></form>
       </DetailBlock>
-      <div className="modal-actions">{(isTeacher || event.creatorId === currentMemberId) && <button className="button button-danger-text" type="button" onClick={onDelete}>Delete</button>}<span className="actions-spacer" /><button className="button button-secondary" type="button" onClick={onClose}>Close</button>{(isTeacher || event.creatorId === currentMemberId) && <button className="button button-primary" type="button" onClick={onEdit}>Edit event</button>}</div>
+      <div className="modal-actions"><button className="button button-danger-text" type="button" onClick={onDelete}>Delete</button><span className="actions-spacer" /><button className="button button-secondary" type="button" onClick={onClose}>Close</button><button className="button button-primary" type="button" onClick={onEdit}>Edit event</button></div>
     </div>
   </Modal>
 }
@@ -466,7 +483,7 @@ function DetailBlock({ title, children }: { title: string; children: React.React
   return <section className="detail-block"><h3>{title}</h3>{children}</section>
 }
 
-function ChatPage({ currentMemberId, messages, setMessages }: { currentMemberId: string; messages: ChatMessage[]; setMessages: StoredSetter<ChatMessage[]> }) {
+function ChatPage({ currentMemberId, messages, setMessages }: { currentMemberId: string; messages: ChatMessage[]; setMessages: FirestoreSetter<ChatMessage> }) {
   const [draft, setDraft] = useState('')
   const [error, setError] = useState('')
   const ordered = [...messages].sort((a, b) => a.createdAt.localeCompare(b.createdAt))
@@ -477,11 +494,7 @@ function ChatPage({ currentMemberId, messages, setMessages }: { currentMemberId:
       setError('Messages must be 2,000 characters or fewer.')
       return
     }
-    const saved = setMessages((previous) => [...previous, { id: createId(), memberId: currentMemberId, text, createdAt: new Date().toISOString() }])
-    if (!saved) {
-      setError('Message could not be saved. Please try again.')
-      return
-    }
+    setMessages((previous) => [...previous, { id: createId(), memberId: currentMemberId, text, createdAt: new Date().toISOString() }])
     setDraft('')
     setError('')
   }
@@ -496,7 +509,7 @@ function ChatPage({ currentMemberId, messages, setMessages }: { currentMemberId:
     <section className="chat-panel panel">
       <div className="chat-header"><div className="chat-room-icon"><UsersRound size={18} /></div><div><strong>Executive Board</strong><small>{roster.length} members</small></div><span className="chat-status"><i /> Shared group</span></div>
       <div className="chat-history" aria-live="polite">
-        {!ordered.length ? <EmptyState icon={<MessageCircle size={23} />} title="Start the conversation" description="Messages you send will appear here for this browser." /> : ordered.map((message, index) => {
+        {!ordered.length ? <EmptyState icon={<MessageCircle size={23} />} title="Start the conversation" description="Messages are shared with approved board members across devices." /> : ordered.map((message, index) => {
           const member = roster.find((candidate) => candidate.id === message.memberId)
           const previous = ordered[index - 1]
           const newDay = !previous || chicagoDate(previous.createdAt) !== chicagoDate(message.createdAt)
@@ -516,8 +529,8 @@ function ChatPage({ currentMemberId, messages, setMessages }: { currentMemberId:
 }
 
 function TasksPage({ currentMemberId, events, tasks, setTasks, agendaItems, setAgendaItems }: {
-  currentMemberId: string; events: CouncilEvent[]; tasks: CouncilTask[]; setTasks: React.Dispatch<React.SetStateAction<CouncilTask[]>>;
-  agendaItems: AgendaItem[]; setAgendaItems: React.Dispatch<React.SetStateAction<AgendaItem[]>>
+  currentMemberId: string; events: CouncilEvent[]; tasks: CouncilTask[]; setTasks: FirestoreSetter<CouncilTask>;
+  agendaItems: AgendaItem[]; setAgendaItems: FirestoreSetter<AgendaItem>
 }) {
   const [todayKey] = useState(() => toLocalDate(new Date()))
   const [statusFilter, setStatusFilter] = useState('All statuses')
@@ -608,28 +621,14 @@ function TaskForm({ task, events, onClose, onSave }: { task: CouncilTask | null;
   </Modal>
 }
 
-function MembersPage({ currentMemberId, members, setMembers }: { currentMemberId: string; members: DirectoryMember[]; setMembers: React.Dispatch<React.SetStateAction<DirectoryMember[]>> }) {
-  const [editingId, setEditingId] = useState('')
-  const [emailDraft, setEmailDraft] = useState('')
-  const teacher = currentMemberId === 'mrs-copple'
-  function startEdit(member: DirectoryMember) {
-    setEditingId(member.id)
-    setEmailDraft(member.email ?? '')
-  }
-  function saveEmail(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
-    setMembers((old) => old.map((member) => member.id === editingId ? { ...member, ...(emailDraft.trim() ? { email: emailDraft.trim() } : { email: undefined }) } : member))
-    setEditingId('')
-  }
+function MembersPage({ members }: { members: DirectoryMember[] }) {
+  const orderedMembers = [...members].sort((a, b) => roster.findIndex((member) => member.id === a.id) - roster.findIndex((member) => member.id === b.id))
   return <>
     <PageHeading eyebrow="THE PEOPLE BEHIND THE PLANS" title="Members" description={`${members.length} members of the DMS Student Council Executive Board.`} />
-    <div className="members-grid">{members.map((member) => <article className="member-card panel" key={member.id}>
-      <span className={`member-avatar ${member.id === 'mrs-copple' ? 'teacher-avatar' : ''}`}>{getInitials(member.name)}</span>
-      <div className="member-info"><h2>{member.name}</h2><p>{member.role}</p>{editingId === member.id ? <form className="member-email-edit" onSubmit={saveEmail}><input className="control" type="email" aria-label={`Email for ${member.name}`} placeholder="Email address" value={emailDraft} onChange={(e) => setEmailDraft(e.target.value)} /><div><button type="button" className="text-button" onClick={() => setEditingId('')}>Cancel</button><button type="submit" className="text-button save-text">Save</button></div></form> : member.email ? <a className="member-email" href={`mailto:${member.email}`}>{member.email}</a> : <span className="member-no-email">Email not provided</span>}</div>
-      {teacher && editingId !== member.id && <button type="button" className="member-edit" onClick={() => startEdit(member)}>{member.email ? 'Edit' : 'Add email'}</button>}
-      {member.id === 'mrs-copple' && <span className="teacher-badge">Teacher admin</span>}
+    <div className="members-grid">{orderedMembers.map((member) => <article className="member-card panel" key={member.id}>
+      <span className="member-avatar">{getInitials(member.name)}</span>
+      <div className="member-info"><h2>{member.name}</h2><p>{member.role}</p><a className="member-email" href={`mailto:${member.email}`}>{member.email}</a>{member.id === 'sitaara-jorden' && <small className="member-roster-note">Please confirm “Jorden”; an earlier roster used “Jordan.”</small>}</div>
     </article>)}</div>
-    {!teacher && <p className="directory-note"><CircleHelp size={15} /> Contact Mrs. Copple to update member details.</p>}
   </>
 }
 
