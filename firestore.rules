@@ -64,6 +64,52 @@ service cloud.firestore {
         );
     }
 
+    function validNewEvent(eventId, data) {
+      let allowedFields = [
+        'id', 'title', 'date', 'timeType', 'startTime', 'endTime', 'location',
+        'description', 'category', 'notes', 'creatorId', 'updatedById',
+        'createdAt', 'updatedAt', 'status', 'comments'
+      ];
+      return data.keys().hasAll(allowedFields)
+        && data.keys().hasOnly(allowedFields)
+        && data.id == eventId
+        && data.title is string
+        && data.title.size() > 0
+        && data.title.size() <= 100
+        && data.date is string
+        && data.date.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+        && data.timeType in ['timed', 'panther-pride', 'all-day']
+        && data.startTime is string
+        && data.endTime is string
+        && (
+          (
+            data.timeType == 'timed'
+            && data.startTime.matches('^([01][0-9]|2[0-3]):[0-5][0-9]$')
+            && data.endTime.matches('^([01][0-9]|2[0-3]):[0-5][0-9]$')
+            && data.endTime > data.startTime
+          )
+          || (
+            data.timeType in ['panther-pride', 'all-day']
+            && data.startTime == ''
+            && data.endTime == ''
+          )
+        )
+        && data.location is string
+        && data.location.size() <= 120
+        && data.description is string
+        && data.description.size() <= 1000
+        && data.category in ['Meeting', 'Activity', 'Deadline']
+        && data.notes is string
+        && data.notes.size() <= 1000
+        && data.creatorId is string
+        && data.updatedById == data.creatorId
+        && data.createdAt is string
+        && data.updatedAt is string
+        && data.status == 'Pending'
+        && data.comments is list
+        && data.comments.size() == 0;
+    }
+
     match /members/{memberId} {
       allow read: if approvedMember();
       allow create, update: if approvedMember() && canonicalMember(memberId, request.resource.data);
@@ -73,15 +119,15 @@ service cloud.firestore {
     match /events/{eventId} {
       allow read: if approvedMember();
       allow create: if approvedMember()
-        && request.resource.data.id == eventId
-        && currentMember(request.resource.data.creatorId)
-        && request.resource.data.updatedById == request.resource.data.creatorId
-        && request.resource.data.status == 'Pending';
+        && validNewEvent(eventId, request.resource.data)
+        && currentMember(request.resource.data.creatorId);
       allow update: if approvedMember() && (
         (
           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['comments'])
           && request.resource.data.comments.size() == resource.data.comments.size() + 1
-          && request.resource.data.comments.hasAll(resource.data.comments)
+          && request.resource.data.comments.removeAll([
+            request.resource.data.comments[resource.data.comments.size()]
+          ]) == resource.data.comments
           && currentMember(request.resource.data.comments[resource.data.comments.size()].memberId)
           && request.resource.data.comments[resource.data.comments.size()].keys().hasOnly(['id', 'memberId', 'text', 'createdAt'])
         )

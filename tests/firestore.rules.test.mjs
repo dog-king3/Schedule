@@ -15,6 +15,28 @@ function googleMember(uid, email, emailVerified = true) {
   }).firestore()
 }
 
+function eventDocument(id, overrides = {}) {
+  return {
+    id,
+    title: 'Board meeting',
+    date: '2026-10-18',
+    timeType: 'timed',
+    startTime: '12:00',
+    endTime: '13:00',
+    location: 'Room 1',
+    description: '',
+    category: 'Meeting',
+    notes: '',
+    creatorId: 'mahima-shah',
+    updatedById: 'mahima-shah',
+    createdAt: '2026-10-18T12:00:00.000Z',
+    updatedAt: '2026-10-18T12:00:00.000Z',
+    status: 'Pending',
+    comments: [],
+    ...overrides,
+  }
+}
+
 before(async () => {
   environment = await initializeTestEnvironment({
     projectId,
@@ -52,16 +74,7 @@ test('denies anonymous and unapproved reads and writes', async () => {
 test('allows any approved member to share workspace data across accounts', async () => {
   const mahima = googleMember('mahima', 'mahshah1@dunlapstudents.net')
   const nikhil = googleMember('nikhil', 'niknayak@dunlapstudents.net')
-  const event = {
-    id: 'event-1',
-    title: 'Board meeting',
-    creatorId: 'mahima-shah',
-    updatedById: 'mahima-shah',
-    status: 'Pending',
-    comments: [],
-    createdAt: '2026-10-18T12:00:00.000Z',
-    updatedAt: '2026-10-18T12:00:00.000Z',
-  }
+  const event = eventDocument('event-1')
 
   await assertSucceeds(setDoc(doc(mahima, 'events/event-1'), event))
   await assertSucceeds(setDoc(doc(mahima, 'chatMessages/message-1'), {
@@ -101,13 +114,7 @@ test('allows any approved member to share workspace data across accounts', async
 test('allows comments only when their author matches the signed-in member', async () => {
   const mahima = googleMember('mahima', 'mahshah1@dunlapstudents.net')
   const nikhil = googleMember('nikhil', 'niknayak@dunlapstudents.net')
-  const event = {
-    id: 'comment-event',
-    creatorId: 'mahima-shah',
-    updatedById: 'mahima-shah',
-    status: 'Pending',
-    comments: [],
-  }
+  const event = eventDocument('comment-event')
 
   await assertSucceeds(setDoc(doc(mahima, 'events/comment-event'), event))
   await assertSucceeds(setDoc(doc(nikhil, 'events/comment-event'), {
@@ -118,22 +125,100 @@ test('allows comments only when their author matches the signed-in member', asyn
     ...event,
     comments: [{ id: 'comment-2', memberId: 'mahima-shah', text: 'Forged author', createdAt: '2026-10-18T12:01:00.000Z' }],
   }))
+  await assertSucceeds(setDoc(doc(nikhil, 'events/comment-event'), {
+    ...event,
+    comments: [
+      { id: 'comment-1', memberId: 'nikhil-nayak', text: 'Looks good', createdAt: '2026-10-18T12:00:00.000Z' },
+      { id: 'comment-2', memberId: 'nikhil-nayak', text: 'Second thought', createdAt: '2026-10-18T12:01:00.000Z' },
+    ],
+  }))
+  await assertSucceeds(setDoc(doc(nikhil, 'events/comment-event'), {
+    ...event,
+    comments: [
+      { id: 'comment-1', memberId: 'nikhil-nayak', text: 'Looks good', createdAt: '2026-10-18T12:00:00.000Z' },
+      { id: 'comment-2', memberId: 'nikhil-nayak', text: 'Second thought', createdAt: '2026-10-18T12:01:00.000Z' },
+      { id: 'comment-3', memberId: 'nikhil-nayak', text: 'One more update', createdAt: '2026-10-18T12:02:00.000Z' },
+    ],
+  }))
+  await assertFails(setDoc(doc(nikhil, 'events/comment-event'), {
+    ...event,
+    comments: [
+      { id: 'comment-2', memberId: 'nikhil-nayak', text: 'Second thought', createdAt: '2026-10-18T12:01:00.000Z' },
+      { id: 'comment-1', memberId: 'nikhil-nayak', text: 'Looks good', createdAt: '2026-10-18T12:00:00.000Z' },
+      { id: 'comment-4', memberId: 'nikhil-nayak', text: 'Reordered old comments', createdAt: '2026-10-18T12:03:00.000Z' },
+    ],
+  }))
+})
+
+test('accepts valid pending event creation and rejects forged fields or approval state', async () => {
+  const mahima = googleMember('mahima', 'mahshah1@dunlapstudents.net')
+
+  await assertSucceeds(setDoc(doc(mahima, 'events/valid-event'), eventDocument('valid-event')))
+  await assertSucceeds(setDoc(doc(mahima, 'events/all-day-event'), eventDocument('all-day-event', {
+    timeType: 'all-day',
+    startTime: '',
+    endTime: '',
+  })))
+  for (const [field, value] of [
+    ['approverId', 'mahima-shah'],
+    ['decidedAt', '2026-10-18T12:00:00.000Z'],
+    ['declineReason', 'Already declined'],
+    ['unexpectedPermission', true],
+    ['status', 'Approved'],
+  ]) {
+    await assertFails(setDoc(doc(mahima, `events/invalid-${field}`), eventDocument(`invalid-${field}`, {
+      [field]: value,
+    })))
+  }
 })
 
 test('ties event and chat authors to the authenticated roster identity', async () => {
+  const mahima = googleMember('mahima', 'mahshah1@dunlapstudents.net')
   const nikhil = googleMember('nikhil', 'niknayak@dunlapstudents.net')
 
-  await assertFails(setDoc(doc(nikhil, 'events/forged-event'), {
-    id: 'forged-event',
-    creatorId: 'mahima-shah',
-    status: 'Pending',
-  }))
+  await assertFails(setDoc(doc(nikhil, 'events/forged-comment-event'), eventDocument('forged-comment-event', {
+    creatorId: 'nikhil-nayak',
+    updatedById: 'nikhil-nayak',
+    comments: [{ id: 'forged-comment', memberId: 'mahima-shah', text: 'Forged author', createdAt: '2026-10-18T12:00:00.000Z' }],
+  })))
+  await assertFails(setDoc(doc(nikhil, 'events/forged-event'), eventDocument('forged-event')))
   await assertFails(setDoc(doc(nikhil, 'chatMessages/forged-message'), {
     id: 'forged-message',
     memberId: 'mahima-shah',
     text: 'Forged identity',
     createdAt: '2026-10-18T12:00:00.000Z',
   }))
+  const immutableAuthorEvent = eventDocument('immutable-author-event')
+  await assertSucceeds(setDoc(doc(mahima, 'events/immutable-author-event'), immutableAuthorEvent))
+  await assertFails(setDoc(doc(nikhil, 'events/immutable-author-event'), {
+    ...immutableAuthorEvent,
+    title: 'Edited while impersonating Mahima',
+  }))
+  await assertFails(setDoc(doc(nikhil, 'events/immutable-author-event'), {
+    ...immutableAuthorEvent,
+    approverId: 'mahima-shah',
+    decidedAt: '2026-10-18T12:01:00.000Z',
+    updatedAt: '2026-10-18T12:01:00.000Z',
+    status: 'Approved',
+  }))
+  await assertSucceeds(setDoc(doc(mahima, 'chatMessages/immutable-message'), {
+    id: 'immutable-message',
+    memberId: 'mahima-shah',
+    text: 'Original',
+    createdAt: '2026-10-18T12:00:00.000Z',
+  }))
+  await assertFails(setDoc(doc(nikhil, 'chatMessages/immutable-message'), {
+    id: 'immutable-message',
+    memberId: 'nikhil-nayak',
+    text: 'Overwritten by another member',
+    createdAt: '2026-10-18T12:01:00.000Z',
+  }))
+  await assertFails(setDoc(doc(nikhil, 'chatMessages/immutable-message'), {
+    id: 'immutable-message',
+    memberId: 'mahima-shah',
+    text: 'Original',
+    createdAt: '2026-10-18T12:00:00.000Z',
+  }, { merge: true }))
 })
 
 test('persists only the canonical member profile and prevents permission changes', async () => {
@@ -151,5 +236,11 @@ test('persists only the canonical member profile and prevents permission changes
     role: 'Administrator',
     email: 'mahshah1@dunlapstudents.net',
     permissions: ['manage-members'],
+  }))
+  await assertFails(setDoc(doc(approved, 'members/mahima-shah'), {
+    id: 'nikhil-nayak',
+    name: 'Nikhil Nayak',
+    role: 'Co-President',
+    email: 'niknayak@dunlapstudents.net',
   }))
 })
