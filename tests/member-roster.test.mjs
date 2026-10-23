@@ -24,15 +24,18 @@ const expectedMembers = [
   ['amili-sinha', 'Amili Sinha', 'Social Head', 'amisinha@dunlapstudents.net'],
   ['chizara-opara', 'Chizara Opara', 'Social Head', 'chiopara@dunlapstudents.net'],
   ['rishik-meduru', 'Rishik Meduru', 'Dance Committee', 'rismeduru@dunlapstudents.net'],
+  ['temporary-tech-specialist', 'Temporary Test Account', 'Tech Specialist', 'covertk912812@gmail.com'],
 ]
 
-test('roster contains the 13 listed students and Erin exactly once with the supplied details', () => {
+test('roster contains the original 13 students, Erin, and the marked temporary test account exactly once', () => {
   const actual = members.map(({ id, name, role, email }) => [id, name, role, email])
-  assert.equal(members.length, 14)
-  assert.equal(members.filter((member) => member.id !== 'erin-copple').length, 13)
-  assert.equal(new Set(members.map((member) => member.name)).size, 14)
-  assert.equal(new Set(members.map((member) => member.email)).size, 14)
+  assert.equal(members.length, 15)
+  assert.equal(members.filter((member) => member.id !== 'erin-copple').length, 14)
+  assert.equal(new Set(members.map((member) => member.name)).size, 15)
+  assert.equal(new Set(members.map((member) => member.email)).size, 15)
   assert.deepEqual(actual, expectedMembers)
+  assert.equal(members.find((member) => member.id === 'temporary-tech-specialist')?.temporary, true)
+  assert.equal(members.find((member) => member.id === 'temporary-tech-specialist')?.role, 'Tech Specialist')
 })
 
 test('every roster email resolves to its intended member and is allowlisted by Firestore', () => {

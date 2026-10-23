@@ -22,7 +22,8 @@ service cloud.firestore {
         'laulang@dunlapstudents.net',
         'amisinha@dunlapstudents.net',
         'chiopara@dunlapstudents.net',
-        'rismeduru@dunlapstudents.net'
+        'rismeduru@dunlapstudents.net',
+        'covertk912812@gmail.com'
       ];
     }
 
@@ -40,11 +41,13 @@ service cloud.firestore {
         || (request.auth.token.email == 'laulang@dunlapstudents.net' && id == 'laura-lang')
         || (request.auth.token.email == 'amisinha@dunlapstudents.net' && id == 'amili-sinha')
         || (request.auth.token.email == 'chiopara@dunlapstudents.net' && id == 'chizara-opara')
-        || (request.auth.token.email == 'rismeduru@dunlapstudents.net' && id == 'rishik-meduru');
+        || (request.auth.token.email == 'rismeduru@dunlapstudents.net' && id == 'rishik-meduru')
+        || (request.auth.token.email == 'covertk912812@gmail.com' && id == 'temporary-tech-specialist');
     }
 
     function canonicalMember(id, data) {
-      return data.keys().hasOnly(['id', 'name', 'role', 'email'])
+      return data.keys().hasOnly(['id', 'name', 'role', 'email', 'temporary'])
+        && (!('temporary' in data) || (id == 'temporary-tech-specialist' && data.temporary == true))
         && data.id == id
         && (
           (id == 'mahima-shah' && data.name == 'Mahima Shah' && data.role == 'Co-President' && data.email == 'mahshah1@dunlapstudents.net')
@@ -60,7 +63,74 @@ service cloud.firestore {
           || (id == 'laura-lang' && data.name == 'Laura Lang' && data.role == 'Spirit Head' && data.email == 'laulang@dunlapstudents.net')
           || (id == 'amili-sinha' && data.name == 'Amili Sinha' && data.role == 'Social Head' && data.email == 'amisinha@dunlapstudents.net')
           || (id == 'chizara-opara' && data.name == 'Chizara Opara' && data.role == 'Social Head' && data.email == 'chiopara@dunlapstudents.net')
-          || (id == 'rishik-meduru' && data.name == 'Rishik Meduru' && data.role == 'Dance Committee' && data.email == 'rismeduru@dunlapstudents.net')
+          ||                     (id == 'rishik-meduru' && data.name == 'Rishik Meduru' && data.role == 'Dance Committee' && data.email == 'rismeduru@dunlapstudents.net')
+          || (id == 'temporary-tech-specialist' && data.name == 'Temporary Test Account' && data.role == 'Tech Specialist' && data.email == 'covertk912812@gmail.com' && data.temporary == true)
+        );
+    }
+
+    function validRecurrence(data) {
+      return !('recurrence' in data)
+        || (
+          data.recurrence is map
+          && data.recurrence.keys().hasOnly(['frequency', 'endType', 'endDate', 'count'])
+          && data.recurrence.frequency in ['daily', 'weekly', 'monthly']
+          && (
+            (
+              data.recurrence.endType == 'date'
+              && data.recurrence.keys().hasAll(['endDate'])
+              && data.recurrence.endDate is string
+              && data.recurrence.endDate.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+              && data.recurrence.endDate >= data.date
+              && !('count' in data.recurrence)
+            )
+            || (
+              data.recurrence.endType == 'count'
+              && data.recurrence.keys().hasAll(['count'])
+              && data.recurrence.count is int
+              && data.recurrence.count >= 2
+              && data.recurrence.count <= 3660
+              && !('endDate' in data.recurrence)
+            )
+          )
+        );
+    }
+
+    function validSeriesMetadata(data) {
+      return (!('excludedDates' in data) || (data.excludedDates is list && data.excludedDates.size() <= 3660))
+        && (!('occurrenceOverrides' in data) || (data.occurrenceOverrides is map && data.occurrenceOverrides.keys().size() <= 3660))
+        && (!('futureChanges' in data) || (data.futureChanges is list && data.futureChanges.size() <= 3660));
+    }
+
+    function facultyAdvisor() {
+      return signedIn()
+        && request.auth.token.email == 'ecopple@dunlapcusd.net'
+        && currentMember('erin-copple');
+    }
+
+    function canDeleteEvent(data) {
+      return currentMember(data.creatorId) || facultyAdvisor();
+    }
+
+    function addsExcludedOccurrence() {
+      return request.resource.data.get('excludedDates', [])
+        .removeAll(resource.data.get('excludedDates', [])).size() > 0;
+    }
+
+    function recurrenceBoundaryIsNotReduced() {
+      return !('recurrence' in resource.data)
+        || (
+          'recurrence' in request.resource.data
+          && resource.data.recurrence.endType == request.resource.data.recurrence.endType
+          && (
+            (
+              resource.data.recurrence.endType == 'count'
+              && request.resource.data.recurrence.count >= resource.data.recurrence.count
+            )
+            || (
+              resource.data.recurrence.endType == 'date'
+              && request.resource.data.recurrence.endDate >= resource.data.recurrence.endDate
+            )
+          )
         );
     }
 
@@ -68,9 +138,13 @@ service cloud.firestore {
       let allowedFields = [
         'id', 'title', 'date', 'timeType', 'startTime', 'endTime', 'location',
         'description', 'category', 'notes', 'creatorId', 'updatedById',
-        'createdAt', 'updatedAt', 'status', 'comments'
+        'createdAt', 'updatedAt', 'status', 'comments', 'recurrence'
       ];
-      return data.keys().hasAll(allowedFields)
+      return data.keys().hasAll([
+          'id', 'title', 'date', 'timeType', 'startTime', 'endTime', 'location',
+          'description', 'category', 'notes', 'creatorId', 'updatedById',
+          'createdAt', 'updatedAt', 'status', 'comments'
+        ])
         && data.keys().hasOnly(allowedFields)
         && data.id == eventId
         && data.title is string
@@ -107,7 +181,8 @@ service cloud.firestore {
         && data.updatedAt is string
         && data.status == 'Pending'
         && data.comments is list
-        && data.comments.size() == 0;
+        && data.comments.size() == 0
+        && validRecurrence(data);
     }
 
     match /members/{memberId} {
@@ -137,9 +212,20 @@ service cloud.firestore {
           && request.resource.data.get('approverId', '') == resource.data.get('approverId', '')
           && request.resource.data.get('decidedAt', '') == resource.data.get('decidedAt', '')
           && currentMember(request.resource.data.updatedById)
+          && validRecurrence(request.resource.data)
+          && validSeriesMetadata(request.resource.data)
+          && (
+            (
+              !request.resource.data.diff(resource.data).affectedKeys().hasAny(['recurrence'])
+              || recurrenceBoundaryIsNotReduced()
+              || canDeleteEvent(resource.data)
+            )
+            && (!addsExcludedOccurrence() || canDeleteEvent(resource.data))
+          )
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
             'title', 'date', 'timeType', 'startTime', 'endTime', 'location', 'description',
-            'category', 'notes', 'updatedById', 'updatedAt'
+            'category', 'notes', 'updatedById', 'updatedAt', 'recurrence', 'excludedDates',
+            'occurrenceOverrides', 'futureChanges'
           ])
         )
         || (
@@ -153,7 +239,7 @@ service cloud.firestore {
           ])
         )
       );
-      allow delete: if approvedMember();
+      allow delete: if approvedMember() && canDeleteEvent(resource.data);
     }
 
     match /chatMessages/{messageId} {
@@ -175,7 +261,7 @@ service cloud.firestore {
             'mahima-shah', 'nikhil-nayak', 'sana-shajahan', 'julia-charles',
             'erin-copple', 'sanay-sumesh', 'sayan-sumeeth', 'sitaara-jorden',
             'arvin-baviskar', 'cora-bradley', 'laura-lang', 'amili-sinha',
-            'chizara-opara', 'rishik-meduru'
+            'chizara-opara', 'rishik-meduru', 'temporary-tech-specialist'
           ]
         );
     }

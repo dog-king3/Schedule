@@ -2,16 +2,18 @@ import { useEffect, useMemo, useState, type FormEvent, type KeyboardEvent } from
 import {
   CalendarDays, Check, CheckCircle2, ChevronLeft,
   ChevronRight, ClipboardList, Clock3, LogOut, MessageCircle, Moon, MoreHorizontal,
-  Plus, Search, Send, Sun, UsersRound, X,
+  Plus, Repeat, Search, Send, Sun, UsersRound, X,
 } from 'lucide-react'
 import { getMemberByEmail, getInitials, members as roster } from './data/members'
 import { auth, firebaseConfigured, firebaseErrorMessage } from './data/firebase'
 import { useFirestoreCollection, type FirestoreSetter } from './data/firestore'
 import { GoogleAuthProvider, onAuthStateChanged, signInWithPopup, signOut, type User } from 'firebase/auth'
 import {
-  createId, formatDate, formatDateTime, formatTime, toLocalDate,
-  type AgendaItem, type ChatMessage, type CouncilEvent, type CouncilTask, type DirectoryMember,
-  type EventCategory, type EventTimeType, type TaskStatus,
+  addCalendarDays, createId, formatDate, formatDateTime, formatTime, toLocalDate,
+  editEventOccurrence, editFutureOccurrences, expandCalendarEvents, excludeEventOccurrence,
+  truncateEventSeriesAt,
+  type AgendaItem, type CalendarEventInstance, type ChatMessage, type CouncilEvent, type CouncilTask, type DirectoryMember,
+  type EventCategory, type EventTimeType, type RecurrenceFrequency, type RecurrenceRule, type TaskStatus,
 } from './data/workspace'
 import './App.css'
 
@@ -210,16 +212,34 @@ function CalendarPage({ currentMemberId, events, setEvents }: {
   const [todayKey] = useState(() => toLocalDate(new Date()))
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState('All categories')
-  const [selectedEventId, setSelectedEventId] = useState('')
+  const [selectedEvent, setSelectedEvent] = useState<CalendarEventInstance | null>(null)
   const [formEvent, setFormEvent] = useState<CouncilEvent | null | undefined>(undefined)
   const [newEventDate, setNewEventDate] = useState('')
-  const selectedEvent = events.find((event) => event.id === selectedEventId)
-  const filteredEvents = useMemo(() => events.filter((event) =>
+  const [editOccurrenceDate, setEditOccurrenceDate] = useState('')
+  const [seriesStartDate, setSeriesStartDate] = useState('')
+  const rangeStart = useMemo(() => {
+    if (view === 'Agenda') {
+      const monthStart = toLocalDate(new Date(cursorDate.getFullYear(), cursorDate.getMonth(), 1))
+      const isCurrentMonth = cursorDate.getFullYear() === Number(todayKey.slice(0, 4))
+        && cursorDate.getMonth() === Number(todayKey.slice(5, 7)) - 1
+      return isCurrentMonth ? todayKey : monthStart
+    }
+    const start = new Date(cursorDate)
+    if (view === 'Month') start.setDate(1)
+    start.setDate(start.getDate() - start.getDay())
+    return toLocalDate(start)
+  }, [view, cursorDate, todayKey])
+  const rangeEnd = view === 'Month'
+    ? addCalendarDays(rangeStart, 41)
+    : view === 'Week' ? addCalendarDays(rangeStart, 6) : addCalendarDays(rangeStart, 365)
+  const expandedEvents = useMemo(() => expandCalendarEvents(events, rangeStart, rangeEnd), [events, rangeStart, rangeEnd])
+  const filteredEvents = useMemo(() => expandedEvents.filter((event) =>
     event.title.toLowerCase().includes(search.toLowerCase())
     && (category === 'All categories' || event.category === category)
-  ), [events, search, category])
+  ), [expandedEvents, search, category])
   const monthTitle = new Intl.DateTimeFormat('en-US', { month: 'long', year: 'numeric' }).format(cursorDate)
-  const upcomingEvents = events.filter((event) => event.status === 'Approved' && event.date >= todayKey).sort(compareEvents).slice(0, 4)
+  const upcomingEvents = useMemo(() => expandCalendarEvents(events, todayKey, addCalendarDays(todayKey, 365))
+    .filter((event) => event.status === 'Approved').sort(compareEvents).slice(0, 4), [events, todayKey])
 
   function navigate(direction: number) {
     const next = new Date(cursorDate)
@@ -236,7 +256,7 @@ function CalendarPage({ currentMemberId, events, setEvents }: {
   const heading = view === 'Month' ? monthTitle : view === 'Week' ? weekHeading(cursorDate) : 'Upcoming events'
   return <>
     <PageHeading eyebrow="YOUR BOARD AT A GLANCE" title="Calendar" description="Meetings, activities, and deadlines for the executive board."
-      action={<button className="button button-primary" type="button" onClick={() => addEvent()}><Plus size={17} /> Add event</button>} />
+      action={<button className="button button-primary" type="button" onClick={() => addEvent()}><Plus size={17} /> Add Event</button>} />
     <section className="calendar-tools panel">
       <div className="calendar-navigation">
         <div className="calendar-arrows">
@@ -258,31 +278,87 @@ function CalendarPage({ currentMemberId, events, setEvents }: {
     </section>
     <div className="calendar-layout">
       <section className="panel calendar-panel" aria-label={`${view} calendar`}>
-        {view === 'Month' && <MonthCalendar date={cursorDate} todayKey={todayKey} events={filteredEvents} onDayClick={addEvent} onEventClick={(id) => setSelectedEventId(id)} />}
-        {view === 'Week' && <WeekCalendar date={cursorDate} todayKey={todayKey} events={filteredEvents} onEventClick={(id) => setSelectedEventId(id)} onDayClick={addEvent} />}
-        {view === 'Agenda' && <AgendaCalendar date={cursorDate} todayKey={todayKey} events={filteredEvents} onEventClick={(id) => setSelectedEventId(id)} onAdd={() => addEvent()} />}
+        {view === 'Month' && <MonthCalendar date={cursorDate} todayKey={todayKey} events={filteredEvents} onDayClick={addEvent} onEventClick={setSelectedEvent} />}
+        {view === 'Week' && <WeekCalendar date={cursorDate} todayKey={todayKey} events={filteredEvents} onEventClick={setSelectedEvent} onDayClick={addEvent} />}
+        {view === 'Agenda' && <AgendaCalendar date={cursorDate} todayKey={todayKey} events={filteredEvents} onEventClick={setSelectedEvent} onAdd={() => addEvent()} />}
         {view !== 'Agenda' && <div className="calendar-legend"><span><i className="legend-dot orange" /> Meeting</span><span><i className="legend-dot blue" /> Activity / deadline</span><span><i className="legend-dot gray" /> Pending proposal</span></div>}
       </section>
       <aside className="upcoming-panel panel">
         <div className="panel-heading"><div><h2>Upcoming meetings</h2><p>Confirmed board events</p></div><CalendarDays size={18} /></div>
-        {upcomingEvents.length ? <div className="upcoming-list">{upcomingEvents.map((event) => <button className="upcoming-item" key={event.id} type="button" onClick={() => setSelectedEventId(event.id)}>
+        {upcomingEvents.length ? <div className="upcoming-list">{upcomingEvents.map((event) => <button className="upcoming-item" key={event.instanceId} type="button" onClick={() => setSelectedEvent(event)}>
           <span className={`upcoming-date ${event.category.toLowerCase()}`}><strong>{Number(event.date.slice(8))}</strong><small>{formatDate(event.date, { month: 'short' })}</small></span>
           <span className="upcoming-copy"><strong>{event.title}</strong><small>{eventTimeLabel(event)}{event.location ? ` · ${event.location}` : ''}</small></span>
         </button>)}</div> : <div className="mini-empty"><CalendarDays size={21} /><p>No confirmed meetings yet.</p></div>}
-        <div className="proposal-summary"><span className="status-dot pending" />{events.filter((event) => event.status === 'Pending').length} pending {events.filter((event) => event.status === 'Pending').length === 1 ? 'proposal' : 'proposals'}</div>
+        <div className="proposal-summary"><span className="status-dot pending" />{events.filter((event) => event.status === 'Pending').length} pending {events.filter((event) => event.status === 'Pending').length === 1 ? 'event' : 'events'}</div>
         <p className="subtle-hint">Any approved board member can review event proposals.</p>
       </aside>
     </div>
-    {formEvent !== undefined && <EventForm event={formEvent} initialDate={newEventDate} currentMemberId={currentMemberId} onClose={() => setFormEvent(undefined)} onSave={(event) => {
-      setEvents((old) => formEvent ? old.map((item) => item.id === event.id ? event : item) : [...old, event])
+    {formEvent !== undefined && <EventForm event={formEvent} initialDate={newEventDate} occurrenceDate={editOccurrenceDate} seriesStartDate={seriesStartDate} currentMemberId={currentMemberId} onClose={() => setFormEvent(undefined)} onSave={(event, scope, occurrenceDate) => {
+      setEvents((old) => {
+        if (!formEvent) return [...old, event]
+        return old.map((item) => {
+          if (item.id !== event.id) return item
+          if (!item.recurrence || scope === 'series') return event
+          const changes = editableEventFields(event)
+          const updatedAt = event.updatedAt
+          if (scope === 'occurrence') {
+            return editEventOccurrence(item, occurrenceDate, changes, currentMemberId, updatedAt)
+          }
+          return editFutureOccurrences(item, occurrenceDate, changes, currentMemberId, updatedAt)
+        })
+      })
       setFormEvent(undefined)
     }} />}
-    {selectedEvent && <EventDetails event={selectedEvent} currentMemberId={currentMemberId} onClose={() => setSelectedEventId('')} onEdit={() => { setSelectedEventId(''); setFormEvent(selectedEvent) }} onUpdate={(updated) => setEvents((old) => old.map((event) => event.id === updated.id ? updated : event))} onDelete={() => {
-      if (!window.confirm(`Delete "${selectedEvent.title}"? This cannot be undone.`)) return
-      setEvents((old) => old.filter((event) => event.id !== selectedEvent.id))
-      setSelectedEventId('')
+    {selectedEvent && <EventDetails event={selectedEvent} currentMemberId={currentMemberId} canDelete={currentMemberId === 'erin-copple' || currentMemberId === selectedEvent.creatorId} onClose={() => setSelectedEvent(null)} onEdit={() => {
+      const series = events.find((event) => event.id === selectedEvent.id)
+      if (!series) return
+      setEditOccurrenceDate(selectedEvent.date)
+      setSeriesStartDate(series.date)
+      const { instanceId: _instanceId, ...occurrence } = selectedEvent
+      setFormEvent({ ...series, ...occurrence })
+      setSelectedEvent(null)
+    }} onUpdate={(updated) => {
+      const workflowUpdate = {
+        comments: updated.comments,
+        status: updated.status,
+        updatedById: updated.updatedById,
+        updatedAt: updated.updatedAt,
+        approverId: updated.approverId,
+        decidedAt: updated.decidedAt,
+        declineReason: updated.declineReason,
+      }
+      setEvents((old) => old.map((event) => event.id === updated.id ? { ...event, ...workflowUpdate } : event))
+      setSelectedEvent((current) => current ? { ...current, ...workflowUpdate } : current)
+    }} onDelete={(scope) => {
+      const master = events.find((event) => event.id === selectedEvent.id)
+      if (!master) return
+      if (scope === 'series' || !master.recurrence) {
+        if (!window.confirm(`Delete "${master.title}"${master.recurrence ? ' and its entire series' : ''}? This cannot be undone.`)) return
+        setEvents((old) => old.filter((event) => event.id !== master.id))
+      } else if (scope === 'occurrence') {
+        if (!window.confirm(`Delete only the ${formatDate(selectedEvent.date)} occurrence?`)) return
+        setEvents((old) => old.map((event) => event.id === master.id
+          ? excludeEventOccurrence(event, selectedEvent.date, currentMemberId, new Date().toISOString())
+          : event))
+      } else {
+        if (!window.confirm(`Delete this and all future occurrences starting ${formatDate(selectedEvent.date)}?`)) return
+        const truncated = truncateEventSeriesAt(master, selectedEvent.date, currentMemberId, new Date().toISOString())
+        if (!truncated) {
+          setEvents((old) => old.filter((event) => event.id !== master.id))
+        } else {
+          setEvents((old) => old.map((event) => event.id === master.id ? truncated : event))
+        }
+      }
+      setSelectedEvent(null)
     }} />}
   </>
+}
+
+function editableEventFields(event: CouncilEvent) {
+  return {
+    title: event.title, timeType: event.timeType, startTime: event.startTime, endTime: event.endTime,
+    location: event.location, description: event.description, category: event.category, notes: event.notes,
+  }
 }
 
 function compareEvents(a: CouncilEvent, b: CouncilEvent) {
@@ -303,6 +379,11 @@ function eventTimeLabel(event: CouncilEvent) {
   return `${formatTime(event.startTime)}${event.endTime ? ` – ${formatTime(event.endTime)}` : ''}`
 }
 
+function recurrenceLabel(event: CouncilEvent) {
+  if (!event.recurrence) return ''
+  return `Repeats ${event.recurrence.frequency}`
+}
+
 function chicagoDate(timestamp: string) {
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone: 'America/Chicago',
@@ -314,15 +395,15 @@ function chicagoDate(timestamp: string) {
   return `${values.year}-${values.month}-${values.day}`
 }
 
-function EventPill({ event, onClick }: { event: CouncilEvent; onClick: (id: string) => void }) {
-  return <button type="button" className={`event-pill ${event.category.toLowerCase()} ${event.status.toLowerCase()}`} onClick={(click) => { click.stopPropagation(); onClick(event.id) }}>
+function EventPill({ event, onClick }: { event: CalendarEventInstance; onClick: (event: CalendarEventInstance) => void }) {
+  return <button type="button" className={`event-pill ${event.category.toLowerCase()} ${event.status.toLowerCase()}`} onClick={(click) => { click.stopPropagation(); onClick(event) }}>
     <span className="event-pill-time">{event.timeType === 'timed' ? formatTime(event.startTime) : event.timeType === 'panther-pride' ? 'PP' : ''}</span>
     <span className="event-pill-title">{event.title}</span>
     {event.status === 'Pending' && <span className="event-pending-dot" aria-label="Pending approval" />}
   </button>
 }
 
-function MonthCalendar({ date, todayKey, events, onDayClick, onEventClick }: { date: Date; todayKey: string; events: CouncilEvent[]; onDayClick: (date: string) => void; onEventClick: (id: string) => void }) {
+function MonthCalendar({ date, todayKey, events, onDayClick, onEventClick }: { date: Date; todayKey: string; events: CalendarEventInstance[]; onDayClick: (date: string) => void; onEventClick: (event: CalendarEventInstance) => void }) {
   const first = new Date(date.getFullYear(), date.getMonth(), 1)
   const start = new Date(first)
   start.setDate(1 - first.getDay())
@@ -343,14 +424,14 @@ function MonthCalendar({ date, todayKey, events, onDayClick, onEventClick }: { d
         }
       }}>
         <span className="day-number">{day.getDate()}</span>
-        <div className="cell-events">{visibleDayEvents.slice(0, 3).map((event) => <EventPill key={event.id} event={event} onClick={onEventClick} />)}{visibleDayEvents.length > 3 && <span className="more-events">+{visibleDayEvents.length - 3} more</span>}</div>
+        <div className="cell-events">{visibleDayEvents.slice(0, 3).map((event) => <EventPill key={event.instanceId} event={event} onClick={() => onEventClick(event)} />)}{visibleDayEvents.length > 3 && <span className="more-events">+{visibleDayEvents.length - 3} more</span>}</div>
       </div>
     })}</div>
     {!activeMonthEvents.length && <div className="month-empty-state"><span>No events this month.</span><button type="button" onClick={() => onDayClick(toLocalDate(new Date(date.getFullYear(), date.getMonth(), 1)))}><Plus size={13} /> Add an event</button></div>}
   </div>
 }
 
-function WeekCalendar({ date, todayKey, events, onEventClick, onDayClick }: { date: Date; todayKey: string; events: CouncilEvent[]; onEventClick: (id: string) => void; onDayClick: (date: string) => void }) {
+function WeekCalendar({ date, todayKey, events, onEventClick, onDayClick }: { date: Date; todayKey: string; events: CalendarEventInstance[]; onEventClick: (event: CalendarEventInstance) => void; onDayClick: (date: string) => void }) {
   const start = new Date(date)
   start.setDate(date.getDate() - date.getDay())
   const days = Array.from({ length: 7 }, (_, i) => {
@@ -364,7 +445,7 @@ function WeekCalendar({ date, todayKey, events, onEventClick, onDayClick }: { da
       const dayEvents = events.filter((event) => event.date === key && event.status !== 'Declined').sort(compareEvents)
       return <section className={`week-day ${key === todayKey ? 'is-today' : ''}`} key={key}>
         <button className="week-day-heading" type="button" onClick={() => onDayClick(key)}><span>{new Intl.DateTimeFormat('en-US', { weekday: 'short' }).format(day)}</span><strong>{day.getDate()}</strong></button>
-        <div className="week-day-events">{dayEvents.map((event) => <EventPill key={event.id} event={event} onClick={onEventClick} />)}
+        <div className="week-day-events">{dayEvents.map((event) => <EventPill key={event.instanceId} event={event} onClick={() => onEventClick(event)} />)}
           {!dayEvents.length && <button type="button" className="week-add" aria-label={`Add event ${formatDate(key)}`} onClick={() => onDayClick(key)}><Plus size={15} /></button>}
         </div>
       </section>
@@ -372,11 +453,11 @@ function WeekCalendar({ date, todayKey, events, onEventClick, onDayClick }: { da
   </div>
 }
 
-function AgendaCalendar({ date, todayKey, events, onEventClick, onAdd }: { date: Date; todayKey: string; events: CouncilEvent[]; onEventClick: (id: string) => void; onAdd: () => void }) {
+function AgendaCalendar({ date, todayKey, events, onEventClick, onAdd }: { date: Date; todayKey: string; events: CalendarEventInstance[]; onEventClick: (event: CalendarEventInstance) => void; onAdd: () => void }) {
   const monthBegin = toLocalDate(new Date(date.getFullYear(), date.getMonth(), 1))
   const visible = events.filter((event) => event.date >= (date.getFullYear() === Number(todayKey.slice(0, 4)) && date.getMonth() === Number(todayKey.slice(5, 7)) - 1 ? todayKey : monthBegin)).sort(compareEvents)
   return <div className="agenda-list">
-    {visible.length ? visible.map((event) => <button className="agenda-row" type="button" key={event.id} onClick={() => onEventClick(event.id)}>
+    {visible.length ? visible.map((event) => <button className="agenda-row" type="button" key={event.instanceId} onClick={() => onEventClick(event)}>
       <span className="agenda-date"><strong>{Number(event.date.slice(8))}</strong><small>{formatDate(event.date, { weekday: 'short', month: 'short' })}</small></span>
       <span className={`agenda-category ${event.category.toLowerCase()}`} />
       <span className="agenda-copy"><strong>{event.title}</strong><small>{eventTimeLabel(event)}{event.location ? ` · ${event.location}` : ''}</small></span>
@@ -386,11 +467,14 @@ function AgendaCalendar({ date, todayKey, events, onEventClick, onAdd }: { date:
   </div>
 }
 
-function EventForm({ event, initialDate, currentMemberId, onClose, onSave }: {
-  event: CouncilEvent | null; initialDate: string; currentMemberId: string; onClose: () => void; onSave: (event: CouncilEvent) => void
+type EditScope = 'occurrence' | 'future' | 'series'
+
+function EventForm({ event, initialDate, occurrenceDate, seriesStartDate, currentMemberId, onClose, onSave }: {
+  event: CouncilEvent | null; initialDate: string; occurrenceDate: string; seriesStartDate: string
+  currentMemberId: string; onClose: () => void; onSave: (event: CouncilEvent, scope: EditScope, occurrenceDate: string) => void
 }) {
   const [title, setTitle] = useState(event?.title ?? '')
-  const [date, setDate] = useState(event?.date ?? initialDate)
+  const [date, setDate] = useState(event?.recurrence ? seriesStartDate || event.date : event?.date ?? initialDate)
   const [timeType, setTimeType] = useState<EventTimeType>(event?.timeType ?? 'timed')
   const [startTime, setStartTime] = useState(event?.startTime ?? '')
   const [endTime, setEndTime] = useState(event?.endTime ?? '')
@@ -398,7 +482,14 @@ function EventForm({ event, initialDate, currentMemberId, onClose, onSave }: {
   const [description, setDescription] = useState(event?.description ?? '')
   const [category, setCategory] = useState<EventCategory>(event?.category ?? 'Meeting')
   const [notes, setNotes] = useState(event?.notes ?? '')
+  const [recurring, setRecurring] = useState(Boolean(event?.recurrence))
+  const [frequency, setFrequency] = useState<RecurrenceFrequency>(event?.recurrence?.frequency ?? 'weekly')
+  const [endType, setEndType] = useState<'date' | 'count'>(event?.recurrence?.endType ?? 'count')
+  const [endDate, setEndDate] = useState(event?.recurrence?.endDate ?? initialDate)
+  const [occurrenceCount, setOccurrenceCount] = useState(event?.recurrence?.count ?? 10)
+  const [editScope, setEditScope] = useState<EditScope>('occurrence')
   const [error, setError] = useState('')
+  const recurrenceFieldsVisible = !event?.recurrence || editScope === 'series'
 
   function submit(form: FormEvent<HTMLFormElement>) {
     form.preventDefault()
@@ -410,20 +501,47 @@ function EventForm({ event, initialDate, currentMemberId, onClose, onSave }: {
       setError('End time must be after start time.')
       return
     }
+    const eventDate = event?.recurrence && editScope !== 'series' ? seriesStartDate : date
+    if (recurring && recurrenceFieldsVisible && endType === 'date' && endDate < eventDate) {
+      setError('The recurrence end date must be on or after the event date.')
+      return
+    }
+    if (recurring && recurrenceFieldsVisible && endType === 'count' && (occurrenceCount < 2 || occurrenceCount > 3660)) {
+      setError('Choose between 2 and 3660 occurrences.')
+      return
+    }
     const now = new Date().toISOString()
-    onSave({
-      id: event?.id ?? createId(), title: title.trim(), date, timeType, startTime: timeType === 'timed' ? startTime : '',
-      endTime: timeType === 'timed' ? endTime : '', location: location.trim(), description: description.trim(),
-      category, notes: notes.trim(), creatorId: event?.creatorId ?? currentMemberId, createdAt: event?.createdAt ?? now,
-      updatedById: currentMemberId, updatedAt: now, status: event?.status ?? 'Pending', approverId: event?.approverId,
-      decidedAt: event?.decidedAt, declineReason: event?.declineReason, comments: event?.comments ?? [],
-    })
+    const recurrence: RecurrenceRule | undefined = recurring && recurrenceFieldsVisible
+      ? endType === 'date' ? { frequency, endType, endDate } : { frequency, endType, count: occurrenceCount }
+      : event?.recurrence
+    const saved: CouncilEvent = {
+      ...(event ?? { id: createId(), creatorId: currentMemberId, createdAt: now, status: 'Pending', comments: [] }),
+      title: title.trim(),
+      date: eventDate,
+      timeType,
+      startTime: timeType === 'timed' ? startTime : '',
+      endTime: timeType === 'timed' ? endTime : '',
+      location: location.trim(),
+      description: description.trim(),
+      category,
+      notes: notes.trim(),
+      updatedById: currentMemberId,
+      updatedAt: now,
+      ...(recurrence ? { recurrence } : {}),
+    }
+    if (!recurring && recurrenceFieldsVisible) delete saved.recurrence
+    onSave(saved, editScope, occurrenceDate || date)
   }
 
   return <Modal title={event ? 'Edit event' : 'Add an event'} onClose={onClose}>
     <form className="form-grid" onSubmit={submit}>
       <div className="form-group form-span"><label htmlFor="event-title">Title <span className="required">*</span></label><input id="event-title" className="control" value={title} onChange={(e) => setTitle(e.target.value)} required maxLength={100} autoFocus /></div>
-      <div className="form-group"><label htmlFor="event-date">Date <span className="required">*</span></label><input id="event-date" className="control" type="date" value={date} onChange={(e) => setDate(e.target.value)} required /></div>
+      {event?.recurrence
+        ? editScope === 'series'
+          ? <div className="form-group"><label htmlFor="event-date">Series start date</label><input id="event-date" className="control" type="date" value={date} onChange={(e) => setDate(e.target.value)} required /></div>
+          : <p className="field-explainer form-span">Editing the occurrence on {formatDate(occurrenceDate)}.</p>
+        : <div className="form-group"><label htmlFor="event-date">Date <span className="required">*</span></label><input id="event-date" className="control" type="date" value={date} onChange={(e) => setDate(e.target.value)} required /></div>}
+      {event?.recurrence && <div className="form-group form-span"><label htmlFor="edit-scope">Apply changes to</label><select id="edit-scope" className="control" value={editScope} onChange={(e) => setEditScope(e.target.value as EditScope)}><option value="occurrence">This occurrence only</option><option value="future">This and future occurrences</option><option value="series">Entire series</option></select></div>}
       <div className="form-group"><label htmlFor="event-category">Category</label><select id="event-category" className="control" value={category} onChange={(e) => setCategory(e.target.value as EventCategory)}><option>Meeting</option><option>Activity</option><option>Deadline</option></select></div>
       <div className="form-group form-span"><label>Time</label><div className="segmented-control">{([['timed', 'Specific time'], ['panther-pride', 'Panther Pride'], ['all-day', 'No exact time']] as [EventTimeType, string][]).map(([value, label]) => <button key={value} type="button" className={timeType === value ? 'selected' : ''} onClick={() => setTimeType(value)}>{label}</button>)}</div></div>
       {timeType === 'timed' && <><div className="form-group"><label htmlFor="event-start">Start time</label><input id="event-start" className="control" type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} /></div><div className="form-group"><label htmlFor="event-end">End time</label><input id="event-end" className="control" type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} /></div></>}
@@ -431,14 +549,27 @@ function EventForm({ event, initialDate, currentMemberId, onClose, onSave }: {
       <div className="form-group form-span"><label htmlFor="event-location">Location</label><input id="event-location" className="control" value={location} onChange={(e) => setLocation(e.target.value)} maxLength={120} /></div>
       <div className="form-group form-span"><label htmlFor="event-description">Description</label><textarea id="event-description" className="control textarea" value={description} onChange={(e) => setDescription(e.target.value)} rows={3} maxLength={1000} /></div>
       <div className="form-group form-span"><label htmlFor="event-notes">Agenda / preparation notes <span className="optional">Optional</span></label><textarea id="event-notes" className="control textarea" value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} maxLength={1000} /></div>
+      {recurrenceFieldsVisible && <>
+        <div className="form-group form-span"><label htmlFor="recurrence">Repeat</label><select id="recurrence" className="control" value={recurring ? frequency : 'none'} onChange={(e) => {
+          setRecurring(e.target.value !== 'none')
+          if (e.target.value !== 'none') setFrequency(e.target.value as RecurrenceFrequency)
+        }}><option value="none">Does not repeat</option><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option></select></div>
+        {recurring && <>
+          <div className="form-group"><label htmlFor="recurrence-end-type">Ends</label><select id="recurrence-end-type" className="control" value={endType} onChange={(e) => setEndType(e.target.value as 'date' | 'count')}><option value="date">On a date</option><option value="count">After a number of events</option></select></div>
+          {endType === 'date'
+            ? <div className="form-group"><label htmlFor="recurrence-end-date">End date</label><input id="recurrence-end-date" className="control" type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} required /></div>
+            : <div className="form-group"><label htmlFor="recurrence-count">Occurrences (2–3660)</label><input id="recurrence-count" className="control" type="number" min={2} max={3660} value={occurrenceCount} onChange={(e) => setOccurrenceCount(Number(e.target.value))} required /></div>}
+        </>}
+      </>}
       {error && <p className="form-error form-span" role="alert">{error}</p>}
-      <div className="modal-actions form-span"><button className="button button-secondary" type="button" onClick={onClose}>Cancel</button><button className="button button-primary" type="submit">{event ? 'Save changes' : 'Submit proposal'}</button></div>
+      <div className="modal-actions form-span"><button className="button button-secondary" type="button" onClick={onClose}>Cancel</button><button className="button button-primary" type="submit">{event ? 'Save changes' : 'Add Event'}</button></div>
     </form>
   </Modal>
 }
 
-function EventDetails({ event, currentMemberId, onClose, onEdit, onUpdate, onDelete }: {
-  event: CouncilEvent; currentMemberId: string; onClose: () => void; onEdit: () => void; onUpdate: (event: CouncilEvent) => void; onDelete: () => void
+function EventDetails({ event, currentMemberId, canDelete, onClose, onEdit, onUpdate, onDelete }: {
+  event: CalendarEventInstance; currentMemberId: string; canDelete: boolean; onClose: () => void; onEdit: () => void
+  onUpdate: (event: CalendarEventInstance) => void; onDelete: (scope: 'occurrence' | 'future' | 'series') => void
 }) {
   const [comment, setComment] = useState('')
   const creator = roster.find((member) => member.id === event.creatorId)
@@ -461,7 +592,7 @@ function EventDetails({ event, currentMemberId, onClose, onEdit, onUpdate, onDel
   return <Modal title="Event details" onClose={onClose} wide>
     <div className="event-detail">
       <div className="detail-title-row"><div><span className={`category-label ${event.category.toLowerCase()}`}>{event.category}</span><h2>{event.title}</h2></div><span className={`status-badge ${event.status.toLowerCase()}`}>{event.status}</span></div>
-      <div className="detail-facts"><span><CalendarDays size={16} />{formatDate(event.date)}</span><span><Clock3 size={16} />{eventTimeLabel(event)}</span>{event.location && <span><UsersRound size={16} />{event.location}</span>}</div>
+      <div className="detail-facts"><span><CalendarDays size={16} />{formatDate(event.date)}</span><span><Clock3 size={16} />{eventTimeLabel(event)}</span>{event.recurrence && <span><Repeat size={16} />{recurrenceLabel(event)}</span>}{event.location && <span><UsersRound size={16} />{event.location}</span>}</div>
       {event.description && <DetailBlock title="Description"><p>{event.description}</p></DetailBlock>}
       {event.notes && <DetailBlock title="Agenda / preparation notes"><p>{event.notes}</p></DetailBlock>}
       <div className="audit-grid"><div><small>Created by</small><strong>{creator?.name ?? 'Board member'}</strong><span>{formatDateTime(event.createdAt)}</span></div><div><small>Last edited</small><strong>{event.updatedById ? roster.find((member) => member.id === event.updatedById)?.name ?? 'Board member' : 'Not edited'}</strong><span>{event.updatedById ? formatDateTime(event.updatedAt) : ''}</span></div>{approver && <div><small>{event.status} by</small><strong>{approver.name}</strong><span>{event.decidedAt ? formatDateTime(event.decidedAt) : ''}</span></div>}</div>
@@ -474,7 +605,9 @@ function EventDetails({ event, currentMemberId, onClose, onEdit, onUpdate, onDel
         })}</div> : <p className="empty-inline">No comments yet. Start the discussion.</p>}
         <form className="comment-form" onSubmit={addComment}><textarea className="control textarea" aria-label="Add a comment" placeholder="Write a comment…" rows={2} value={comment} onChange={(e) => setComment(e.target.value)} maxLength={1000} required /><button className="button button-secondary" type="submit" disabled={!comment.trim()}><Send size={15} /> Comment</button></form>
       </DetailBlock>
-      <div className="modal-actions"><button className="button button-danger-text" type="button" onClick={onDelete}>Delete</button><span className="actions-spacer" /><button className="button button-secondary" type="button" onClick={onClose}>Close</button><button className="button button-primary" type="button" onClick={onEdit}>Edit event</button></div>
+      <div className="modal-actions">{canDelete && (event.recurrence
+        ? <div className="recurrence-delete-actions"><button className="button button-danger-text" type="button" onClick={() => onDelete('occurrence')}>Delete this occurrence</button><button className="button button-danger-text" type="button" onClick={() => onDelete('future')}>Delete this and future</button><button className="button button-danger-text" type="button" onClick={() => onDelete('series')}>Delete entire series</button></div>
+        : <button className="button button-danger-text" type="button" onClick={() => onDelete('series')}>Delete</button>)}<span className="actions-spacer" /><button className="button button-secondary" type="button" onClick={onClose}>Close</button><button className="button button-primary" type="button" onClick={onEdit}>Edit event</button></div>
     </div>
   </Modal>
 }
@@ -627,7 +760,7 @@ function MembersPage({ members }: { members: DirectoryMember[] }) {
     <PageHeading eyebrow="THE PEOPLE BEHIND THE PLANS" title="Members" description={`${members.length} members of the DMS Student Council Executive Board.`} />
     <div className="members-grid">{orderedMembers.map((member) => <article className="member-card panel" key={member.id}>
       <span className="member-avatar">{getInitials(member.name)}</span>
-      <div className="member-info"><h2>{member.name}</h2><p>{member.role}</p><a className="member-email" href={`mailto:${member.email}`}>{member.email}</a>{member.id === 'sitaara-jorden' && <small className="member-roster-note">Please confirm “Jorden”; an earlier roster used “Jordan.”</small>}</div>
+      <div className="member-info"><h2>{member.name}</h2><p>{member.role}</p><a className="member-email" href={`mailto:${member.email}`}>{member.email}</a>{member.temporary && <small className="member-roster-note">Temporary test account.</small>}{member.id === 'sitaara-jorden' && <small className="member-roster-note">Please confirm “Jorden”; an earlier roster used “Jordan.”</small>}</div>
     </article>)}</div>
   </>
 }

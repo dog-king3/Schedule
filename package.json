@@ -8,6 +8,7 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
+    "test:calendar": "node --test tests/calendar-recurrence.test.mjs",
     "test:roster": "node --test tests/member-roster.test.mjs",
     "test:rules": "npx --yes firebase-tools@15.34.0 emulators:exec --project demo-dms-student-council --only firestore \"node --test tests/firestore.rules.test.mjs\""
   },

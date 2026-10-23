@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { after, before, test } from 'node:test'
 import { initializeTestEnvironment, assertFails, assertSucceeds } from '@firebase/rules-unit-testing'
-import { doc, getDoc, setDoc } from 'firebase/firestore'
+import { deleteDoc, doc, getDoc, setDoc } from 'firebase/firestore'
 
 const projectId = 'demo-dms-student-council'
 let environment
@@ -159,17 +159,103 @@ test('accepts valid pending event creation and rejects forged fields or approval
     startTime: '',
     endTime: '',
   })))
+  await assertSucceeds(setDoc(doc(mahima, 'events/recurring-event'), eventDocument('recurring-event', {
+    recurrence: { frequency: 'weekly', endType: 'count', count: 8 },
+  })))
+  await assertSucceeds(setDoc(doc(mahima, 'events/date-ended-event'), eventDocument('date-ended-event', {
+    recurrence: { frequency: 'monthly', endType: 'date', endDate: '2027-10-18' },
+  })))
+  let invalidIndex = 0
   for (const [field, value] of [
     ['approverId', 'mahima-shah'],
     ['decidedAt', '2026-10-18T12:00:00.000Z'],
     ['declineReason', 'Already declined'],
     ['unexpectedPermission', true],
     ['status', 'Approved'],
+    ['recurrence', { frequency: 'yearly', endType: 'count', count: 5 }],
+    ['recurrence', { frequency: 'daily', endType: 'count', count: 1 }],
+    ['recurrence', { frequency: 'weekly', endType: 'date', endDate: '2026-10-17' }],
   ]) {
-    await assertFails(setDoc(doc(mahima, `events/invalid-${field}`), eventDocument(`invalid-${field}`, {
+    const eventId = `invalid-event-${invalidIndex++}`
+    await assertFails(setDoc(doc(mahima, `events/${eventId}`), eventDocument(eventId, {
       [field]: value,
     })))
   }
+})
+
+test('allows every roster member to create events and limits deletion to the creator or Erin', async () => {
+  const approvedMembers = [
+    ['mahima-shah', 'mahshah1@dunlapstudents.net'],
+    ['nikhil-nayak', 'niknayak@dunlapstudents.net'],
+    ['sana-shajahan', 'sanshajahan@dunlapstudents.net'],
+    ['julia-charles', 'julcharles@dunlapstudents.net'],
+    ['erin-copple', 'ecopple@dunlapcusd.net'],
+    ['sanay-sumesh', 'sansumesh@dunlapstudents.net'],
+    ['sayan-sumeeth', 'saysumeeth@dunlapstudents.net'],
+    ['sitaara-jorden', 'sitjorden@dunlapstudents.net'],
+    ['arvin-baviskar', 'arvbaviskar@dunlapstudents.net'],
+    ['cora-bradley', 'corbradley@dunlapstudents.net'],
+    ['laura-lang', 'laulang@dunlapstudents.net'],
+    ['amili-sinha', 'amisinha@dunlapstudents.net'],
+    ['chizara-opara', 'chiopara@dunlapstudents.net'],
+    ['rishik-meduru', 'rismeduru@dunlapstudents.net'],
+    ['temporary-tech-specialist', 'covertk912812@gmail.com'],
+  ]
+  for (const [memberId, email] of approvedMembers) {
+    const member = googleMember(memberId, email)
+    const eventId = `create-${memberId}`
+    await assertSucceeds(setDoc(doc(member, `events/${eventId}`), eventDocument(eventId, {
+      creatorId: memberId,
+      updatedById: memberId,
+    })))
+  }
+
+  const mahima = googleMember('mahima', 'mahshah1@dunlapstudents.net')
+  const nikhil = googleMember('nikhil', 'niknayak@dunlapstudents.net')
+  const temporary = googleMember('temporary-test', 'covertk912812@gmail.com')
+  const erin = googleMember('erin', 'ecopple@dunlapcusd.net')
+  const ownedEvent = eventDocument('owned-event')
+  await assertSucceeds(setDoc(doc(mahima, 'events/owned-event'), ownedEvent))
+  await assertFails(deleteDoc(doc(nikhil, 'events/owned-event')))
+  await assertFails(deleteDoc(doc(temporary, 'events/owned-event')))
+  await assertFails(setDoc(doc(nikhil, 'events/owned-event'), {
+    ...ownedEvent,
+    excludedDates: ['2026-10-18'],
+    updatedById: 'nikhil-nayak',
+    updatedAt: '2026-10-18T12:01:00.000Z',
+  }))
+  await assertSucceeds(deleteDoc(doc(mahima, 'events/owned-event')))
+
+  const recurring = eventDocument('recurring-owned-event', {
+    recurrence: { frequency: 'weekly', endType: 'count', count: 4 },
+  })
+  await assertSucceeds(setDoc(doc(mahima, 'events/recurring-owned-event'), recurring))
+  await assertSucceeds(setDoc(doc(nikhil, 'events/recurring-owned-event'), {
+    ...recurring,
+    futureChanges: [{ fromDate: '2026-10-25', changes: { location: 'Room 3' } }],
+    updatedById: 'nikhil-nayak',
+    updatedAt: '2026-10-18T12:01:30.000Z',
+  }))
+  await assertFails(setDoc(doc(nikhil, 'events/recurring-owned-event'), {
+    ...recurring,
+    futureChanges: [{ fromDate: '2026-10-25', changes: { location: 'Room 3' } }],
+    recurrence: { frequency: 'weekly', endType: 'count', count: 2 },
+    updatedById: 'nikhil-nayak',
+    updatedAt: '2026-10-18T12:02:00.000Z',
+  }))
+  await assertSucceeds(setDoc(doc(mahima, 'events/recurring-owned-event'), {
+    ...recurring,
+    futureChanges: [{ fromDate: '2026-10-25', changes: { location: 'Room 3' } }],
+    recurrence: { frequency: 'weekly', endType: 'count', count: 2 },
+    updatedById: 'mahima-shah',
+    updatedAt: '2026-10-18T12:02:00.000Z',
+  }))
+
+  await assertSucceeds(setDoc(doc(nikhil, 'events/another-member-event'), eventDocument('another-member-event', {
+    creatorId: 'nikhil-nayak',
+    updatedById: 'nikhil-nayak',
+  })))
+  await assertSucceeds(deleteDoc(doc(erin, 'events/another-member-event')))
 })
 
 test('ties event and chat authors to the authenticated roster identity', async () => {
@@ -236,6 +322,20 @@ test('persists only the canonical member profile and prevents permission changes
     role: 'Administrator',
     email: 'mahshah1@dunlapstudents.net',
     permissions: ['manage-members'],
+  }))
+  await assertSucceeds(setDoc(doc(approved, 'members/temporary-tech-specialist'), {
+    id: 'temporary-tech-specialist',
+    name: 'Temporary Test Account',
+    role: 'Tech Specialist',
+    email: 'covertk912812@gmail.com',
+    temporary: true,
+  }))
+  await assertFails(setDoc(doc(approved, 'members/temporary-tech-specialist'), {
+    id: 'temporary-tech-specialist',
+    name: 'Temporary Test Account',
+    role: 'Administrator',
+    email: 'covertk912812@gmail.com',
+    temporary: true,
   }))
   await assertFails(setDoc(doc(approved, 'members/mahima-shah'), {
     id: 'nikhil-nayak',

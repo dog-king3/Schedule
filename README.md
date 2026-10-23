@@ -34,11 +34,11 @@ The repository already initializes the Firebase SDK, but no Firebase web-app con
 5. For the hosted build, open the GitHub repository's **Settings → Secrets and variables → Actions → Variables** and add these repository variables using the same four values from the Firebase Web app: `VITE_FIREBASE_API_KEY`, `VITE_FIREBASE_AUTH_DOMAIN`, `VITE_FIREBASE_PROJECT_ID`, and `VITE_FIREBASE_APP_ID`.
 6. In GitHub **Settings → Pages**, set the build/deployment source to **GitHub Actions**. Push to `main` (or run the workflow manually). The deployment job stays skipped until all four Firebase variables are set.
 
-Google sign-in accepts only verified Firebase Google accounts whose email exactly matches the member roster. Firestore independently checks the verified email against the approved roster on every operation. All approved members can manage shared events, approvals, comments, chat, tasks, and agendas. The canonical roster is readable and initialized in Firestore but cannot be changed through the client; no member can grant a permission or change an approved email through client data.
+Google sign-in accepts only verified Firebase Google accounts whose email exactly matches the member roster. Firestore independently checks the verified email against the approved roster on every operation. All approved members can create, edit, approve, and comment on shared events. Students can delete only events they created; Erin Copple can delete any event. Recurrence is stored on the shared event record and expanded into stable date-based occurrences in each calendar view, so clients do not create duplicate event documents. The canonical roster is readable and initialized in Firestore but cannot be changed through the client; no member can grant a permission or change an approved email through client data.
 
 The member names, roles, and email addresses are included in the frontend and Firestore rules to support the public Pages client and exact-email authorization. Treat the deployed directory and repository contents as visible to anyone; do not add non-roster personal information or credentials.
 
-The supplied list contains **14 total entries (13 students plus Erin Copple)**, rather than 14 students plus Erin. Sitaara's surname is entered as **Jorden**, matching `sitjorden@dunlapstudents.net`; the earlier roster spelling **Jordan** still needs confirmation.
+The supplied list contains **14 original entries (13 students plus Erin Copple)**, rather than 14 students plus Erin. A separately requested **temporary** Tech Specialist test account is also listed and permitted by the rules; remove its entry from `src/data/members.ts`, `firestore.rules`, and the matching tests when it is no longer needed. Sitaara's surname is entered as **Jorden**, matching `sitjorden@dunlapstudents.net`; the earlier roster spelling **Jordan** still needs confirmation.
 
 ## Shared data
 
@@ -49,8 +49,16 @@ Firestore collections are `events` (including event comments and approval status
 ```sh
 npm run lint
 npm run build
+npm run test:calendar
 npm run test:roster
 npm run test:rules
 ```
 
-The roster test verifies all 14 supplied records, exact email/name/role mappings, and alignment with the Firestore allowlist. The Firestore rules tests run against the local Firestore Emulator using a demo-only project ID. They cover anonymous/unapproved denial, approved cross-account sharing, identity spoofing, event approvals/comments, and immutable roster permissions. Google provider sign-in and real multi-device behavior require the Firebase setup above and must be verified against the configured project.
+The recurrence tests verify daily, weekly, and monthly occurrence boundaries, exclusions, overrides, and stable occurrence IDs. The roster test verifies the supplied members plus the temporary test account and alignment with the Firestore allowlist. The Firestore rules tests run against the local Firestore Emulator using a demo-only project ID. Google provider sign-in and real multi-device behavior require the Firebase setup above and must be verified against the configured project.
+
+After reviewing local changes and confirming the intended Firebase project, publish only the rules or only the frontend with:
+
+```sh
+firebase deploy --only firestore:rules --project dms-studentcouncil
+firebase deploy --only hosting --project dms-studentcouncil
+```
