@@ -62,6 +62,70 @@ test('monthly recurrence skips months without the original day and honors the in
   assert.deepEqual(getOccurrenceDates(monthly, '2026-05-31', '2026-03-01'), ['2026-03-31', '2026-05-31'])
 })
 
+test('monthly date recurrence can move missing dates to each month’s last day', () => {
+  const monthly = {
+    ...baseEvent,
+    date: '2024-01-31',
+    recurrence: {
+      frequency: 'monthly',
+      monthlyPattern: { type: 'date', missingDateBehavior: 'last-day' },
+      endType: 'count',
+      count: 5,
+    },
+  }
+  assert.deepEqual(getOccurrenceDates(monthly), [
+    '2024-01-31',
+    '2024-02-29',
+    '2024-03-31',
+    '2024-04-30',
+    '2024-05-31',
+  ])
+})
+
+test('monthly weekday recurrence supports first, second, third, fourth, and last weekdays', () => {
+  const occurrences = [
+    ['2026-01-07', ['2026-01-07', '2026-02-04', '2026-03-04', '2026-04-01']],
+    ['2026-01-13', ['2026-01-13', '2026-02-10', '2026-03-10', '2026-04-14']],
+    ['2026-01-21', ['2026-01-21', '2026-02-18', '2026-03-18', '2026-04-15']],
+    ['2026-01-22', ['2026-01-22', '2026-02-26', '2026-03-26', '2026-04-23']],
+    ['2026-01-30', ['2026-01-30', '2026-02-27', '2026-03-27', '2026-04-24']],
+  ]
+
+  for (const [date, expected] of occurrences) {
+    assert.deepEqual(getOccurrenceDates({
+      ...baseEvent,
+      date,
+      recurrence: {
+        frequency: 'monthly',
+        monthlyPattern: { type: 'weekday' },
+        endType: 'count',
+        count: expected.length,
+      },
+    }), expected)
+  }
+})
+
+test('monthly weekday agenda expansion respects count, date range, and stable series documents', () => {
+  const event = {
+    ...baseEvent,
+    id: 'monthly-weekday-series',
+    date: '2026-01-07',
+    status: 'Approved',
+    recurrence: {
+      frequency: 'monthly',
+      monthlyPattern: { type: 'weekday' },
+      endType: 'count',
+      count: 4,
+    },
+  }
+  assert.deepEqual(expandCalendarEvents([event], '2026-02-01', '2026-04-30').map(({ date, instanceId }) => [date, instanceId]), [
+    ['2026-02-04', 'monthly-weekday-series::2026-02-04'],
+    ['2026-03-04', 'monthly-weekday-series::2026-03-04'],
+    ['2026-04-01', 'monthly-weekday-series::2026-04-01'],
+  ])
+  assert.equal(countOccurrencesBefore(event, '2026-03-05'), 3)
+})
+
 test('recurring instances are stable, shared-data-derived, and apply exclusions and edits by date', () => {
   const event = {
     ...baseEvent,

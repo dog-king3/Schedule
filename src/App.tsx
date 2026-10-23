@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type FormEvent, type KeyboardEvent } from
 import {
   CalendarDays, Check, CheckCircle2, ChevronLeft,
   ChevronRight, ClipboardList, Clock3, LogOut, MessageCircle, Moon, MoreHorizontal,
-  Plus, Repeat, Search, Send, Sun, UsersRound, X,
+  Pencil, Plus, Repeat, Search, Send, Sun, Trash2, UsersRound, X,
 } from 'lucide-react'
 import { getMemberByEmail, getInitials, members as roster } from './data/members'
 import { auth, firebaseConfigured, firebaseErrorMessage } from './data/firebase'
@@ -365,6 +365,18 @@ function compareEvents(a: CouncilEvent, b: CouncilEvent) {
   return a.date.localeCompare(b.date) || a.startTime.localeCompare(b.startTime) || a.createdAt.localeCompare(b.createdAt)
 }
 
+function describeMonthlyWeekday(date: string) {
+  const [year, month, day] = date.split('-').map(Number)
+  const weekday = new Date(Date.UTC(year, month - 1, day, 12)).getUTCDay()
+  const monthLength = new Date(Date.UTC(year, month, 0)).getUTCDate()
+  const ordinal = day + 7 > monthLength
+    ? 'last'
+    : ['first', 'second', 'third', 'fourth', 'fifth'][Math.floor((day - 1) / 7)]
+  const weekdayName = new Intl.DateTimeFormat('en-US', { weekday: 'long', timeZone: 'UTC' })
+    .format(new Date(Date.UTC(2026, 0, weekday + 4, 12)))
+  return `Repeats on the ${ordinal} ${weekdayName} of each month.`
+}
+
 function weekHeading(date: Date) {
   const start = new Date(date)
   start.setDate(date.getDate() - date.getDay())
@@ -484,12 +496,63 @@ function EventForm({ event, initialDate, occurrenceDate, seriesStartDate, curren
   const [notes, setNotes] = useState(event?.notes ?? '')
   const [recurring, setRecurring] = useState(Boolean(event?.recurrence))
   const [frequency, setFrequency] = useState<RecurrenceFrequency>(event?.recurrence?.frequency ?? 'weekly')
+  const [monthlyPattern, setMonthlyPattern] = useState<'date' | 'weekday'>(event?.recurrence?.monthlyPattern?.type ?? 'date')
+  const [missingDateBehavior] = useState<'last-day' | 'skip' | ''>(
+    event?.recurrence?.monthlyPattern?.missingDateBehavior ?? (event?.recurrence ? 'skip' : ''),
+  )
   const [endType, setEndType] = useState<'date' | 'count'>(event?.recurrence?.endType ?? 'count')
   const [endDate, setEndDate] = useState(event?.recurrence?.endDate ?? initialDate)
   const [occurrenceCount, setOccurrenceCount] = useState(event?.recurrence?.count ?? 10)
   const [editScope, setEditScope] = useState<EditScope>('occurrence')
+  const [showMissingDatePrompt, setShowMissingDatePrompt] = useState(false)
   const [error, setError] = useState('')
   const recurrenceFieldsVisible = !event?.recurrence || editScope === 'series'
+
+  function saveEvent(selectedMissingDateBehavior?: 'last-day' | 'skip') {
+    const eventDate = event?.recurrence && editScope !== 'series' ? seriesStartDate : date
+    const selectedBehavior = selectedMissingDateBehavior ?? missingDateBehavior
+    const needsMissingDateBehavior = recurring
+      && recurrenceFieldsVisible
+      && frequency === 'monthly'
+      && monthlyPattern === 'date'
+      && Number(eventDate.slice(8, 10)) > 28
+    if (needsMissingDateBehavior && !selectedBehavior) {
+      setShowMissingDatePrompt(true)
+      return
+    }
+    const now = new Date().toISOString()
+    const recurrence: RecurrenceRule | undefined = recurring && recurrenceFieldsVisible
+      ? {
+        ...(endType === 'date' ? { endType, endDate } : { endType, count: occurrenceCount }),
+        frequency,
+        ...(frequency === 'monthly'
+          ? {
+            monthlyPattern: {
+              type: monthlyPattern,
+              ...(monthlyPattern === 'date' && selectedBehavior ? { missingDateBehavior: selectedBehavior } : {}),
+            },
+          }
+          : {}),
+      }
+      : event?.recurrence
+    const saved: CouncilEvent = {
+      ...(event ?? { id: createId(), creatorId: currentMemberId, createdAt: now, status: 'Pending', comments: [] }),
+      title: title.trim(),
+      date: eventDate,
+      timeType,
+      startTime: timeType === 'timed' ? startTime : '',
+      endTime: timeType === 'timed' ? endTime : '',
+      location: location.trim(),
+      description: description.trim(),
+      category,
+      notes: notes.trim(),
+      updatedById: currentMemberId,
+      updatedAt: now,
+      ...(recurrence ? { recurrence } : {}),
+    }
+    if (!recurring && recurrenceFieldsVisible) delete saved.recurrence
+    onSave(saved, editScope, occurrenceDate || date)
+  }
 
   function submit(form: FormEvent<HTMLFormElement>) {
     form.preventDefault()
@@ -510,28 +573,16 @@ function EventForm({ event, initialDate, occurrenceDate, seriesStartDate, curren
       setError('Choose between 2 and 3660 occurrences.')
       return
     }
-    const now = new Date().toISOString()
-    const recurrence: RecurrenceRule | undefined = recurring && recurrenceFieldsVisible
-      ? endType === 'date' ? { frequency, endType, endDate } : { frequency, endType, count: occurrenceCount }
-      : event?.recurrence
-    const saved: CouncilEvent = {
-      ...(event ?? { id: createId(), creatorId: currentMemberId, createdAt: now, status: 'Pending', comments: [] }),
-      title: title.trim(),
-      date: eventDate,
-      timeType,
-      startTime: timeType === 'timed' ? startTime : '',
-      endTime: timeType === 'timed' ? endTime : '',
-      location: location.trim(),
-      description: description.trim(),
-      category,
-      notes: notes.trim(),
-      updatedById: currentMemberId,
-      updatedAt: now,
-      ...(recurrence ? { recurrence } : {}),
-    }
-    if (!recurring && recurrenceFieldsVisible) delete saved.recurrence
-    onSave(saved, editScope, occurrenceDate || date)
+    saveEvent()
   }
+
+  if (showMissingDatePrompt) return <Modal title="What should happen in months without the 31st?" onClose={() => setShowMissingDatePrompt(false)}>
+    <p className="field-explainer">Your monthly event falls on the {Number(date.slice(8, 10))}. Choose how to handle months that do not include that date.</p>
+    <div className="monthly-missing-options">
+      <button className="button button-primary" type="button" onClick={() => saveEvent('last-day')}>Move to the last day of that month</button>
+      <button className="button button-secondary" type="button" onClick={() => saveEvent('skip')}>Skip months without that date</button>
+    </div>
+  </Modal>
 
   return <Modal title={event ? 'Edit event' : 'Add an event'} onClose={onClose}>
     <form className="form-grid" onSubmit={submit}>
@@ -555,6 +606,10 @@ function EventForm({ event, initialDate, occurrenceDate, seriesStartDate, curren
           if (e.target.value !== 'none') setFrequency(e.target.value as RecurrenceFrequency)
         }}><option value="none">Does not repeat</option><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option></select></div>
         {recurring && <>
+          {frequency === 'monthly' && <>
+            <div className="form-group form-span"><label htmlFor="monthly-pattern">Monthly pattern</label><select id="monthly-pattern" className="control" value={monthlyPattern} onChange={(e) => setMonthlyPattern(e.target.value as 'date' | 'weekday')}><option value="date">Same date each month (for example, the 31st)</option><option value="weekday">Same weekday pattern each month (for example, first Wednesday)</option></select></div>
+            {monthlyPattern === 'weekday' && <p className="field-explainer form-span">{describeMonthlyWeekday(date)}</p>}
+          </>}
           <div className="form-group"><label htmlFor="recurrence-end-type">Ends</label><select id="recurrence-end-type" className="control" value={endType} onChange={(e) => setEndType(e.target.value as 'date' | 'count')}><option value="date">On a date</option><option value="count">After a number of events</option></select></div>
           {endType === 'date'
             ? <div className="form-group"><label htmlFor="recurrence-end-date">End date</label><input id="recurrence-end-date" className="control" type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} required /></div>
@@ -572,6 +627,8 @@ function EventDetails({ event, currentMemberId, canDelete, onClose, onEdit, onUp
   onUpdate: (event: CalendarEventInstance) => void; onDelete: (scope: 'occurrence' | 'future' | 'series') => void
 }) {
   const [comment, setComment] = useState('')
+  const [editingCommentId, setEditingCommentId] = useState<string | null>(null)
+  const [commentEditDraft, setCommentEditDraft] = useState('')
   const creator = roster.find((member) => member.id === event.creatorId)
   const approver = roster.find((member) => member.id === event.approverId)
   function addComment(form: FormEvent<HTMLFormElement>) {
@@ -579,6 +636,22 @@ function EventDetails({ event, currentMemberId, canDelete, onClose, onEdit, onUp
     if (!comment.trim()) return
     onUpdate({ ...event, comments: [...event.comments, { id: createId(), memberId: currentMemberId, text: comment.trim(), createdAt: new Date().toISOString() }] })
     setComment('')
+  }
+  function saveComment(commentId: string) {
+    const text = commentEditDraft.trim()
+    if (!text || text.length > 1000) return
+    onUpdate({
+      ...event,
+      comments: event.comments.map((item) => item.id === commentId
+        ? { ...item, text, editedAt: new Date().toISOString() }
+        : item),
+    })
+    setEditingCommentId(null)
+    setCommentEditDraft('')
+  }
+  function deleteComment(commentId: string) {
+    if (!window.confirm('Delete your comment? This cannot be undone.')) return
+    onUpdate({ ...event, comments: event.comments.filter((item) => item.id !== commentId) })
   }
   function decide(status: 'Approved' | 'Declined') {
     let declineReason: string | undefined
@@ -601,7 +674,10 @@ function EventDetails({ event, currentMemberId, canDelete, onClose, onEdit, onUp
       <DetailBlock title={`Event discussion · ${event.comments.length}`}>
         {event.comments.length ? <div className="comment-list">{event.comments.map((item) => {
           const author = roster.find((member) => member.id === item.memberId)
-          return <div className="comment-row" key={item.id}><span className="avatar avatar-small">{getInitials(author?.name ?? '?')}</span><div><p><strong>{author?.name ?? 'Member'}</strong><small>{formatDateTime(item.createdAt)}</small></p><span>{item.text}</span></div></div>
+          const own = item.memberId === currentMemberId
+          return <div className="comment-row" key={item.id}><span className="avatar avatar-small">{getInitials(author?.name ?? '?')}</span><div><p><strong>{author?.name ?? 'Member'}</strong><small>{formatDateTime(item.createdAt)}{item.editedAt ? ' · Edited' : ''}</small></p>{editingCommentId === item.id
+            ? <div className="content-edit-form"><textarea className="control textarea" aria-label="Edit comment" value={commentEditDraft} onChange={(e) => setCommentEditDraft(e.target.value)} maxLength={1000} autoFocus /><div className="inline-content-actions"><button className="button button-secondary" type="button" onClick={() => setEditingCommentId(null)}>Cancel</button><button className="button button-primary" type="button" onClick={() => saveComment(item.id)} disabled={!commentEditDraft.trim()}>Save</button></div></div>
+            : <><span>{item.text}</span>{own && <div className="inline-content-actions"><button className="button button-secondary" type="button" onClick={() => { setEditingCommentId(item.id); setCommentEditDraft(item.text) }}><Pencil size={12} /> Edit</button><button className="button button-danger-text" type="button" onClick={() => deleteComment(item.id)}><Trash2 size={12} /> Delete</button></div>}</>}</div></div>
         })}</div> : <p className="empty-inline">No comments yet. Start the discussion.</p>}
         <form className="comment-form" onSubmit={addComment}><textarea className="control textarea" aria-label="Add a comment" placeholder="Write a comment…" rows={2} value={comment} onChange={(e) => setComment(e.target.value)} maxLength={1000} required /><button className="button button-secondary" type="submit" disabled={!comment.trim()}><Send size={15} /> Comment</button></form>
       </DetailBlock>
@@ -619,6 +695,8 @@ function DetailBlock({ title, children }: { title: string; children: React.React
 function ChatPage({ currentMemberId, messages, setMessages }: { currentMemberId: string; messages: ChatMessage[]; setMessages: FirestoreSetter<ChatMessage> }) {
   const [draft, setDraft] = useState('')
   const [error, setError] = useState('')
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null)
+  const [messageEditDraft, setMessageEditDraft] = useState('')
   const ordered = [...messages].sort((a, b) => a.createdAt.localeCompare(b.createdAt))
   function send() {
     const text = draft.trim()
@@ -630,6 +708,23 @@ function ChatPage({ currentMemberId, messages, setMessages }: { currentMemberId:
     setMessages((previous) => [...previous, { id: createId(), memberId: currentMemberId, text, createdAt: new Date().toISOString() }])
     setDraft('')
     setError('')
+  }
+  function saveMessage(messageId: string) {
+    const text = messageEditDraft.trim()
+    if (!text || text.length > 2000) {
+      setError('Messages must contain 1–2,000 characters.')
+      return
+    }
+    setMessages((previous) => previous.map((message) => message.id === messageId
+      ? { ...message, text, editedAt: new Date().toISOString() }
+      : message))
+    setEditingMessageId(null)
+    setMessageEditDraft('')
+    setError('')
+  }
+  function deleteMessage(message: ChatMessage) {
+    if (!window.confirm('Delete your message? This cannot be undone.')) return
+    setMessages((previous) => previous.filter((item) => item.id !== message.id))
   }
   function keyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key === 'Enter' && !event.shiftKey) {
@@ -651,7 +746,9 @@ function ChatPage({ currentMemberId, messages, setMessages }: { currentMemberId:
             {newDay && <div className="date-divider"><span>{formatDate(chicagoDate(message.createdAt), { month: 'long', day: 'numeric', year: 'numeric' })}</span></div>}
             <div className={`chat-message ${own ? 'own-message' : ''}`}>
               {!own && <span className="avatar avatar-small">{getInitials(member?.name ?? '?')}</span>}
-              <div className="message-content">{!own && <div className="message-author">{member?.name ?? 'Member'}</div>}<div className="message-bubble">{message.text}</div><time>{new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago', hour: 'numeric', minute: '2-digit' }).format(new Date(message.createdAt))}</time></div>
+              <div className="message-content">{!own && <div className="message-author">{member?.name ?? 'Member'}</div>}{editingMessageId === message.id
+                ? <div className="content-edit-form"><textarea className="control textarea" aria-label="Edit message" value={messageEditDraft} onChange={(event) => setMessageEditDraft(event.target.value)} maxLength={2000} autoFocus /><div className="inline-content-actions"><button className="button button-secondary" type="button" onClick={() => setEditingMessageId(null)}>Cancel</button><button className="button button-primary" type="button" onClick={() => saveMessage(message.id)} disabled={!messageEditDraft.trim()}>Save</button></div></div>
+                : <><div className="message-bubble">{message.text}</div><div className="message-time"><time>{new Intl.DateTimeFormat('en-US', { timeZone: 'America/Chicago', hour: 'numeric', minute: '2-digit' }).format(new Date(message.createdAt))}</time>{message.editedAt && <small>Edited</small>}</div>{own && <div className="inline-content-actions"><button className="button button-secondary" type="button" onClick={() => { setEditingMessageId(message.id); setMessageEditDraft(message.text) }}><Pencil size={12} /> Edit</button><button className="button button-danger-text" type="button" onClick={() => deleteMessage(message)}><Trash2 size={12} /> Delete</button></div>}</>}</div>
             </div>
           </div>
         })}
@@ -760,7 +857,7 @@ function MembersPage({ members }: { members: DirectoryMember[] }) {
     <PageHeading eyebrow="THE PEOPLE BEHIND THE PLANS" title="Members" description={`${members.length} members of the DMS Student Council Executive Board.`} />
     <div className="members-grid">{orderedMembers.map((member) => <article className="member-card panel" key={member.id}>
       <span className="member-avatar">{getInitials(member.name)}</span>
-      <div className="member-info"><h2>{member.name}</h2><p>{member.role}</p><a className="member-email" href={`mailto:${member.email}`}>{member.email}</a>{member.temporary && <small className="member-roster-note">Temporary test account.</small>}{member.id === 'sitaara-jorden' && <small className="member-roster-note">Please confirm “Jorden”; an earlier roster used “Jordan.”</small>}</div>
+      <div className="member-info"><h2>{member.name}</h2><p>{member.role}</p><a className="member-email" href={`mailto:${member.email}`}>{member.email}</a></div>
     </article>)}</div>
   </>
 }

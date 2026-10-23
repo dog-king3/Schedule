@@ -3,7 +3,6 @@ export type Member = {
   name: string
   role: string
   email: string
-  temporary?: boolean
 }
 
 export const members: Member[] = [
@@ -21,7 +20,6 @@ export const members: Member[] = [
   { id: 'amili-sinha', name: 'Amili Sinha', role: 'Social Head', email: 'amisinha@dunlapstudents.net' },
   { id: 'chizara-opara', name: 'Chizara Opara', role: 'Social Head', email: 'chiopara@dunlapstudents.net' },
   { id: 'rishik-meduru', name: 'Rishik Meduru', role: 'Dance Committee', email: 'rismeduru@dunlapstudents.net' },
-  { id: 'temporary-tech-specialist', name: 'Temporary Test Account', role: 'Tech Specialist', email: 'covertk912812@gmail.com', temporary: true },
 ]
 
 export function getMemberByEmail(email: string | null | undefined): Member | undefined {

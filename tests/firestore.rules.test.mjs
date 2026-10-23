@@ -111,42 +111,92 @@ test('allows any approved member to share workspace data across accounts', async
   }))
 })
 
-test('allows comments only when their author matches the signed-in member', async () => {
+test('chat message authors can edit and delete only their own messages', async () => {
+  const mahima = googleMember('mahima', 'mahshah1@dunlapstudents.net')
+  const nikhil = googleMember('nikhil', 'niknayak@dunlapstudents.net')
+  const message = {
+    id: 'authored-message',
+    memberId: 'mahima-shah',
+    text: 'Original message',
+    createdAt: '2026-10-18T12:00:00.000Z',
+  }
+
+  await assertSucceeds(setDoc(doc(mahima, 'chatMessages/authored-message'), message))
+  await assertSucceeds(setDoc(doc(mahima, 'chatMessages/authored-message'), {
+    ...message,
+    text: 'Edited message',
+    editedAt: '2026-10-18T12:01:00.000Z',
+  }))
+  await assertFails(setDoc(doc(nikhil, 'chatMessages/authored-message'), {
+    ...message,
+    text: 'Changed by someone else',
+    editedAt: '2026-10-18T12:02:00.000Z',
+  }))
+  await assertFails(deleteDoc(doc(nikhil, 'chatMessages/authored-message')))
+  await assertFails(setDoc(doc(mahima, 'chatMessages/authored-message'), {
+    ...message,
+    memberId: 'nikhil-nayak',
+    text: 'Forged sender',
+    editedAt: '2026-10-18T12:03:00.000Z',
+  }))
+  await assertSucceeds(deleteDoc(doc(mahima, 'chatMessages/authored-message')))
+})
+
+test('comment authors can edit and delete only their own comments without changing event fields', async () => {
   const mahima = googleMember('mahima', 'mahshah1@dunlapstudents.net')
   const nikhil = googleMember('nikhil', 'niknayak@dunlapstudents.net')
   const event = eventDocument('comment-event')
+  const mahimaComment = {
+    id: 'comment-mahima',
+    memberId: 'mahima-shah',
+    text: 'Keep the original time',
+    createdAt: '2026-10-18T12:00:00.000Z',
+  }
+  const nikhilComment = {
+    id: 'comment-nikhil',
+    memberId: 'nikhil-nayak',
+    text: 'Looks good',
+    createdAt: '2026-10-18T12:01:00.000Z',
+  }
 
   await assertSucceeds(setDoc(doc(mahima, 'events/comment-event'), event))
   await assertSucceeds(setDoc(doc(nikhil, 'events/comment-event'), {
     ...event,
-    comments: [{ id: 'comment-1', memberId: 'nikhil-nayak', text: 'Looks good', createdAt: '2026-10-18T12:00:00.000Z' }],
+    comments: [nikhilComment],
   }))
   await assertFails(setDoc(doc(nikhil, 'events/comment-event'), {
     ...event,
-    comments: [{ id: 'comment-2', memberId: 'mahima-shah', text: 'Forged author', createdAt: '2026-10-18T12:01:00.000Z' }],
+    comments: [{ ...mahimaComment, text: 'Forged author' }],
   }))
-  await assertSucceeds(setDoc(doc(nikhil, 'events/comment-event'), {
+  await assertSucceeds(setDoc(doc(mahima, 'events/comment-event'), {
     ...event,
-    comments: [
-      { id: 'comment-1', memberId: 'nikhil-nayak', text: 'Looks good', createdAt: '2026-10-18T12:00:00.000Z' },
-      { id: 'comment-2', memberId: 'nikhil-nayak', text: 'Second thought', createdAt: '2026-10-18T12:01:00.000Z' },
-    ],
+    comments: [nikhilComment, mahimaComment],
   }))
+  const bothComments = { ...event, comments: [nikhilComment, mahimaComment] }
   await assertSucceeds(setDoc(doc(nikhil, 'events/comment-event'), {
-    ...event,
-    comments: [
-      { id: 'comment-1', memberId: 'nikhil-nayak', text: 'Looks good', createdAt: '2026-10-18T12:00:00.000Z' },
-      { id: 'comment-2', memberId: 'nikhil-nayak', text: 'Second thought', createdAt: '2026-10-18T12:01:00.000Z' },
-      { id: 'comment-3', memberId: 'nikhil-nayak', text: 'One more update', createdAt: '2026-10-18T12:02:00.000Z' },
-    ],
+    ...bothComments,
+    comments: [{ ...nikhilComment, text: 'Edited thought', editedAt: '2026-10-18T12:02:00.000Z' }, mahimaComment],
   }))
   await assertFails(setDoc(doc(nikhil, 'events/comment-event'), {
-    ...event,
-    comments: [
-      { id: 'comment-2', memberId: 'nikhil-nayak', text: 'Second thought', createdAt: '2026-10-18T12:01:00.000Z' },
-      { id: 'comment-1', memberId: 'nikhil-nayak', text: 'Looks good', createdAt: '2026-10-18T12:00:00.000Z' },
-      { id: 'comment-4', memberId: 'nikhil-nayak', text: 'Reordered old comments', createdAt: '2026-10-18T12:03:00.000Z' },
-    ],
+    ...bothComments,
+    comments: [{ ...nikhilComment, text: 'Edited thought', editedAt: '2026-10-18T12:02:00.000Z' }, { ...mahimaComment, text: 'Edited by another member' }],
+  }))
+  await assertFails(setDoc(doc(nikhil, 'events/comment-event'), {
+    ...bothComments,
+    title: 'Changed protected event field',
+    comments: [{ ...nikhilComment, text: 'Edited thought', editedAt: '2026-10-18T12:02:00.000Z' }, mahimaComment],
+  }))
+  await assertFails(setDoc(doc(nikhil, 'events/comment-event'), {
+    ...bothComments,
+    comments: [nikhilComment],
+  }))
+  await assertSucceeds(setDoc(doc(nikhil, 'events/comment-event'), {
+    ...bothComments,
+    comments: [mahimaComment],
+  }))
+  await assertSucceeds(setDoc(doc(mahima, 'events/comment-event'), {
+    ...bothComments,
+    comments: [],
   }))
 })
 
@@ -161,6 +211,22 @@ test('accepts valid pending event creation and rejects forged fields or approval
   })))
   await assertSucceeds(setDoc(doc(mahima, 'events/recurring-event'), eventDocument('recurring-event', {
     recurrence: { frequency: 'weekly', endType: 'count', count: 8 },
+  })))
+  await assertSucceeds(setDoc(doc(mahima, 'events/monthly-date-pattern'), eventDocument('monthly-date-pattern', {
+    recurrence: {
+      frequency: 'monthly',
+      monthlyPattern: { type: 'date', missingDateBehavior: 'last-day' },
+      endType: 'count',
+      count: 8,
+    },
+  })))
+  await assertSucceeds(setDoc(doc(mahima, 'events/monthly-weekday-pattern'), eventDocument('monthly-weekday-pattern', {
+    recurrence: {
+      frequency: 'monthly',
+      monthlyPattern: { type: 'weekday' },
+      endType: 'date',
+      endDate: '2027-10-18',
+    },
   })))
   await assertSucceeds(setDoc(doc(mahima, 'events/date-ended-event'), eventDocument('date-ended-event', {
     recurrence: { frequency: 'monthly', endType: 'date', endDate: '2027-10-18' },
@@ -199,7 +265,6 @@ test('allows every roster member to create events and limits deletion to the cre
     ['amili-sinha', 'amisinha@dunlapstudents.net'],
     ['chizara-opara', 'chiopara@dunlapstudents.net'],
     ['rishik-meduru', 'rismeduru@dunlapstudents.net'],
-    ['temporary-tech-specialist', 'covertk912812@gmail.com'],
   ]
   for (const [memberId, email] of approvedMembers) {
     const member = googleMember(memberId, email)
@@ -212,12 +277,10 @@ test('allows every roster member to create events and limits deletion to the cre
 
   const mahima = googleMember('mahima', 'mahshah1@dunlapstudents.net')
   const nikhil = googleMember('nikhil', 'niknayak@dunlapstudents.net')
-  const temporary = googleMember('temporary-test', 'covertk912812@gmail.com')
   const erin = googleMember('erin', 'ecopple@dunlapcusd.net')
   const ownedEvent = eventDocument('owned-event')
   await assertSucceeds(setDoc(doc(mahima, 'events/owned-event'), ownedEvent))
   await assertFails(deleteDoc(doc(nikhil, 'events/owned-event')))
-  await assertFails(deleteDoc(doc(temporary, 'events/owned-event')))
   await assertFails(setDoc(doc(nikhil, 'events/owned-event'), {
     ...ownedEvent,
     excludedDates: ['2026-10-18'],
@@ -322,20 +385,6 @@ test('persists only the canonical member profile and prevents permission changes
     role: 'Administrator',
     email: 'mahshah1@dunlapstudents.net',
     permissions: ['manage-members'],
-  }))
-  await assertSucceeds(setDoc(doc(approved, 'members/temporary-tech-specialist'), {
-    id: 'temporary-tech-specialist',
-    name: 'Temporary Test Account',
-    role: 'Tech Specialist',
-    email: 'covertk912812@gmail.com',
-    temporary: true,
-  }))
-  await assertFails(setDoc(doc(approved, 'members/temporary-tech-specialist'), {
-    id: 'temporary-tech-specialist',
-    name: 'Temporary Test Account',
-    role: 'Administrator',
-    email: 'covertk912812@gmail.com',
-    temporary: true,
   }))
   await assertFails(setDoc(doc(approved, 'members/mahima-shah'), {
     id: 'nikhil-nayak',

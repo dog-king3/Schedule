@@ -22,8 +22,7 @@ service cloud.firestore {
         'laulang@dunlapstudents.net',
         'amisinha@dunlapstudents.net',
         'chiopara@dunlapstudents.net',
-        'rismeduru@dunlapstudents.net',
-        'covertk912812@gmail.com'
+        'rismeduru@dunlapstudents.net'
       ];
     }
 
@@ -41,13 +40,11 @@ service cloud.firestore {
         || (request.auth.token.email == 'laulang@dunlapstudents.net' && id == 'laura-lang')
         || (request.auth.token.email == 'amisinha@dunlapstudents.net' && id == 'amili-sinha')
         || (request.auth.token.email == 'chiopara@dunlapstudents.net' && id == 'chizara-opara')
-        || (request.auth.token.email == 'rismeduru@dunlapstudents.net' && id == 'rishik-meduru')
-        || (request.auth.token.email == 'covertk912812@gmail.com' && id == 'temporary-tech-specialist');
+        || (request.auth.token.email == 'rismeduru@dunlapstudents.net' && id == 'rishik-meduru');
     }
 
     function canonicalMember(id, data) {
-      return data.keys().hasOnly(['id', 'name', 'role', 'email', 'temporary'])
-        && (!('temporary' in data) || (id == 'temporary-tech-specialist' && data.temporary == true))
+      return data.keys().hasOnly(['id', 'name', 'role', 'email'])
         && data.id == id
         && (
           (id == 'mahima-shah' && data.name == 'Mahima Shah' && data.role == 'Co-President' && data.email == 'mahshah1@dunlapstudents.net')
@@ -63,8 +60,7 @@ service cloud.firestore {
           || (id == 'laura-lang' && data.name == 'Laura Lang' && data.role == 'Spirit Head' && data.email == 'laulang@dunlapstudents.net')
           || (id == 'amili-sinha' && data.name == 'Amili Sinha' && data.role == 'Social Head' && data.email == 'amisinha@dunlapstudents.net')
           || (id == 'chizara-opara' && data.name == 'Chizara Opara' && data.role == 'Social Head' && data.email == 'chiopara@dunlapstudents.net')
-          ||                     (id == 'rishik-meduru' && data.name == 'Rishik Meduru' && data.role == 'Dance Committee' && data.email == 'rismeduru@dunlapstudents.net')
-          || (id == 'temporary-tech-specialist' && data.name == 'Temporary Test Account' && data.role == 'Tech Specialist' && data.email == 'covertk912812@gmail.com' && data.temporary == true)
+          || (id == 'rishik-meduru' && data.name == 'Rishik Meduru' && data.role == 'Dance Committee' && data.email == 'rismeduru@dunlapstudents.net')
         );
     }
 
@@ -72,8 +68,32 @@ service cloud.firestore {
       return !('recurrence' in data)
         || (
           data.recurrence is map
-          && data.recurrence.keys().hasOnly(['frequency', 'endType', 'endDate', 'count'])
+          && data.recurrence.keys().hasOnly(['frequency', 'endType', 'endDate', 'count', 'monthlyPattern'])
           && data.recurrence.frequency in ['daily', 'weekly', 'monthly']
+          && (
+            data.recurrence.frequency == 'monthly'
+              ? (
+                !('monthlyPattern' in data.recurrence)
+                || (
+                  data.recurrence.monthlyPattern is map
+                  && (
+                    (
+                      data.recurrence.monthlyPattern.type == 'date'
+                      && data.recurrence.monthlyPattern.keys().hasOnly(['type', 'missingDateBehavior'])
+                      && (
+                        !('missingDateBehavior' in data.recurrence.monthlyPattern)
+                        || data.recurrence.monthlyPattern.missingDateBehavior in ['last-day', 'skip']
+                      )
+                    )
+                    || (
+                      data.recurrence.monthlyPattern.type == 'weekday'
+                      && data.recurrence.monthlyPattern.keys().hasOnly(['type'])
+                    )
+                  )
+                )
+              )
+              : !('monthlyPattern' in data.recurrence)
+          )
           && (
             (
               data.recurrence.endType == 'date'
@@ -109,6 +129,70 @@ service cloud.firestore {
 
     function canDeleteEvent(data) {
       return currentMember(data.creatorId) || facultyAdvisor();
+    }
+
+    function validNewComment(comment) {
+      return comment is map
+        && comment.keys().hasOnly(['id', 'memberId', 'text', 'createdAt'])
+        && comment.keys().hasAll(['id', 'memberId', 'text', 'createdAt'])
+        && comment.id is string
+        && comment.memberId is string
+        && currentMember(comment.memberId)
+        && comment.text is string
+        && comment.text.size() > 0
+        && comment.text.size() <= 1000
+        && comment.createdAt is string;
+    }
+
+    function validCommentEdit(previous, updated) {
+      return previous is map
+        && updated is map
+        && previous.keys().hasOnly(['id', 'memberId', 'text', 'createdAt', 'editedAt'])
+        && updated.keys().hasOnly(['id', 'memberId', 'text', 'createdAt', 'editedAt'])
+        && updated.keys().hasAll(['id', 'memberId', 'text', 'createdAt', 'editedAt'])
+        && currentMember(previous.memberId)
+        && updated.id == previous.id
+        && updated.memberId == previous.memberId
+        && updated.createdAt == previous.createdAt
+        && updated.text is string
+        && updated.text.size() > 0
+        && updated.text.size() <= 1000
+        && updated.text != previous.text
+        && updated.editedAt is string;
+    }
+
+    function validCommentChanges() {
+      let previousComments = resource.data.comments;
+      let updatedComments = request.resource.data.comments;
+      let previousSet = previousComments.toSet();
+      let updatedSet = updatedComments.toSet();
+      let removed = previousSet.difference(updatedSet).toList();
+      let added = updatedSet.difference(previousSet).toList();
+      return previousComments is list
+        && updatedComments is list
+        && previousComments.size() == previousSet.size()
+        && updatedComments.size() == updatedSet.size()
+        && (
+          (
+            removed.size() == 0
+            && added.size() == 1
+            && updatedComments[updatedComments.size() - 1] == added[0]
+            && previousComments == updatedComments.removeAll([added[0]])
+            && validNewComment(added[0])
+          )
+          || (
+            removed.size() == 1
+            && added.size() == 0
+            && updatedComments == previousComments.removeAll(removed)
+            && currentMember(removed[0].memberId)
+          )
+          || (
+            removed.size() == 1
+            && added.size() == 1
+            && previousComments.removeAll(removed) == updatedComments.removeAll(added)
+            && validCommentEdit(removed[0], added[0])
+          )
+        );
     }
 
     function addsExcludedOccurrence() {
@@ -199,12 +283,7 @@ service cloud.firestore {
       allow update: if approvedMember() && (
         (
           request.resource.data.diff(resource.data).affectedKeys().hasOnly(['comments'])
-          && request.resource.data.comments.size() == resource.data.comments.size() + 1
-          && request.resource.data.comments.removeAll([
-            request.resource.data.comments[resource.data.comments.size()]
-          ]) == resource.data.comments
-          && currentMember(request.resource.data.comments[resource.data.comments.size()].memberId)
-          && request.resource.data.comments[resource.data.comments.size()].keys().hasOnly(['id', 'memberId', 'text', 'createdAt'])
+          && validCommentChanges()
         )
         || (
           request.resource.data.status == resource.data.status
@@ -247,8 +326,26 @@ service cloud.firestore {
       allow create: if approvedMember()
         && request.resource.data.id == messageId
         && currentMember(request.resource.data.memberId)
-        && request.resource.data.keys().hasOnly(['id', 'memberId', 'text', 'createdAt']);
-      allow update, delete: if false;
+        && request.resource.data.keys().hasOnly(['id', 'memberId', 'text', 'createdAt'])
+        && request.resource.data.text is string
+        && request.resource.data.text.size() > 0
+        && request.resource.data.text.size() <= 2000
+        && request.resource.data.createdAt is string;
+      allow update: if approvedMember()
+        && resource.data.id == messageId
+        && resource.data.id == request.resource.data.id
+        && currentMember(resource.data.memberId)
+        && request.resource.data.memberId == resource.data.memberId
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.text is string
+        && request.resource.data.text.size() > 0
+        && request.resource.data.text.size() <= 2000
+        && request.resource.data.editedAt is string
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['text', 'editedAt'])
+        && request.resource.data.text != resource.data.text;
+      allow delete: if approvedMember()
+        && resource.data.id == messageId
+        && currentMember(resource.data.memberId);
     }
 
     match /tasks/{taskId} {
@@ -261,7 +358,7 @@ service cloud.firestore {
             'mahima-shah', 'nikhil-nayak', 'sana-shajahan', 'julia-charles',
             'erin-copple', 'sanay-sumesh', 'sayan-sumeeth', 'sitaara-jorden',
             'arvin-baviskar', 'cora-bradley', 'laura-lang', 'amili-sinha',
-            'chizara-opara', 'rishik-meduru', 'temporary-tech-specialist'
+            'chizara-opara', 'rishik-meduru'
           ]
         );
     }

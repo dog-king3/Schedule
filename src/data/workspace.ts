@@ -10,6 +10,7 @@ export type EventComment = {
   memberId: string
   text: string
   createdAt: string
+  editedAt?: string
 }
 
 export type RecurrenceFrequency = 'daily' | 'weekly' | 'monthly'
@@ -18,6 +19,10 @@ export type RecurrenceRule = {
   endType: 'date' | 'count'
   endDate?: string
   count?: number
+  monthlyPattern?: {
+    type: 'date' | 'weekday'
+    missingDateBehavior?: 'last-day' | 'skip'
+  }
 }
 
 export type RecurrenceChanges = {
@@ -58,6 +63,7 @@ export type ChatMessage = {
   memberId: string
   text: string
   createdAt: string
+  editedAt?: string
 }
 
 export type CouncilTask = {
@@ -104,6 +110,13 @@ export function getOccurrenceDates(event: CouncilEvent, throughDate?: string, fr
   const rule = event.recurrence
   const result: string[] = []
   const dayOfMonth = Number(event.date.slice(8, 10))
+  const [baseYear, baseMonth] = event.date.split('-').map(Number)
+  const baseDate = new Date(Date.UTC(baseYear, baseMonth - 1, dayOfMonth, 12))
+  const weekday = baseDate.getUTCDay()
+  const baseMonthLength = new Date(Date.UTC(baseYear, baseMonth, 0)).getUTCDate()
+  const weekdayOrdinal = dayOfMonth + 7 > baseMonthLength
+    ? 'last'
+    : String(Math.floor((dayOfMonth - 1) / 7) + 1)
   const dayDifference = fromDate
     ? Math.max(0, Math.floor((Date.parse(`${fromDate}T00:00:00Z`) - Date.parse(`${event.date}T00:00:00Z`)) / 86_400_000))
     : 0
@@ -114,14 +127,13 @@ export function getOccurrenceDates(event: CouncilEvent, throughDate?: string, fr
       : fromDate
         ? Math.max(0, (Number(fromDate.slice(0, 4)) - Number(event.date.slice(0, 4))) * 12 + Number(fromDate.slice(5, 7)) - Number(event.date.slice(5, 7)))
         : 0
-  let occurrenceNumber = 0
-  if (rule.frequency === 'daily') occurrenceNumber = index
-  else if (rule.frequency === 'weekly') occurrenceNumber = index
-  else {
+  let occurrenceNumber = index
+  if (rule.frequency === 'monthly') {
+    occurrenceNumber = 0
     for (let monthIndex = 0; monthIndex < index; monthIndex += 1) {
-      const [year, month] = event.date.split('-').map(Number)
-      const monthDate = new Date(Date.UTC(year, month - 1 + monthIndex, 1, 12))
-      if (dayOfMonth <= new Date(Date.UTC(monthDate.getUTCFullYear(), monthDate.getUTCMonth() + 1, 0)).getUTCDate()) occurrenceNumber += 1
+      if (monthlyOccurrenceDate(baseYear, baseMonth, monthIndex, dayOfMonth, weekday, weekdayOrdinal, rule)) {
+        occurrenceNumber += 1
+      }
     }
   }
   for (; ;) {
@@ -131,13 +143,12 @@ export function getOccurrenceDates(event: CouncilEvent, throughDate?: string, fr
     } else if (rule.frequency === 'weekly') {
       candidate = addCalendarDays(event.date, index * 7)
     } else {
-      const [year, month] = event.date.split('-').map(Number)
-      const monthDate = new Date(Date.UTC(year, month - 1 + index, 1, 12))
-      if (dayOfMonth > new Date(Date.UTC(monthDate.getUTCFullYear(), monthDate.getUTCMonth() + 1, 0)).getUTCDate()) {
+      const monthlyDate = monthlyOccurrenceDate(baseYear, baseMonth, index, dayOfMonth, weekday, weekdayOrdinal, rule)
+      if (!monthlyDate) {
         index += 1
         continue
       }
-      candidate = `${monthDate.getUTCFullYear()}-${String(monthDate.getUTCMonth() + 1).padStart(2, '0')}-${String(dayOfMonth).padStart(2, '0')}`
+      candidate = monthlyDate
     }
     if (rule.endType === 'date' && rule.endDate && candidate > rule.endDate) break
     if (throughDate && candidate > throughDate) break
@@ -148,6 +159,40 @@ export function getOccurrenceDates(event: CouncilEvent, throughDate?: string, fr
     index += 1
   }
   return result
+}
+
+function monthlyOccurrenceDate(
+  baseYear: number,
+  baseMonth: number,
+  monthIndex: number,
+  dayOfMonth: number,
+  weekday: number,
+  weekdayOrdinal: string,
+  rule: RecurrenceRule,
+): string | undefined {
+  const monthDate = new Date(Date.UTC(baseYear, baseMonth - 1 + monthIndex, 1, 12))
+  const year = monthDate.getUTCFullYear()
+  const month = monthDate.getUTCMonth()
+  const monthLength = new Date(Date.UTC(year, month + 1, 0)).getUTCDate()
+  const pattern = rule.monthlyPattern ?? { type: 'date' }
+  let day: number
+
+  if (pattern.type === 'weekday') {
+    if (weekdayOrdinal === 'last') {
+      day = monthLength - ((new Date(Date.UTC(year, month, monthLength, 12)).getUTCDay() - weekday + 7) % 7)
+    } else {
+      const firstWeekday = 1 + ((weekday - new Date(Date.UTC(year, month, 1, 12)).getUTCDay() + 7) % 7)
+      day = firstWeekday + (Number(weekdayOrdinal) - 1) * 7
+      if (day > monthLength) return undefined
+    }
+  } else if (dayOfMonth > monthLength) {
+    if (pattern.missingDateBehavior !== 'last-day') return undefined
+    day = monthLength
+  } else {
+    day = dayOfMonth
+  }
+
+  return `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`
 }
 
 export function expandCalendarEvents(events: CouncilEvent[], fromDate?: string, throughDate?: string): CalendarEventInstance[] {
